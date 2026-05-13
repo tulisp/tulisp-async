@@ -32,5 +32,10 @@ path = "examples/channel.rs"
 required-features = ["tokio"]
 
 [[example]]
+name = "rust_driver"
+path = "examples/rust_driver.rs"
+required-features = ["tokio"]
+
+[[example]]
 name = "std_executor"
 path = "examples/std_executor.rs"
