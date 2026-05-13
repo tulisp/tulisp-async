@@ -113,6 +113,11 @@ fn is_timer_handle(v: &TulispObject) -> bool {
 /// the timer queue from Rust. The same mailbox the lisp builtins use
 /// is captured here, so a `(run-with-timer …)` from lisp and a
 /// [`tick`](Self::tick) from Rust see the same set of pending firings.
+///
+/// `Clone` is shallow — clones share the same mailbox and executor,
+/// not the same `&mut TulispContext`. Useful when one Rust task wants
+/// to tick while another monitors the same queue for diagnostics.
+#[derive(Clone)]
 pub struct Handle {
     mailbox: pending::Mailbox,
     executor: Arc<dyn Executor>,

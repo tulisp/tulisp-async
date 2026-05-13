@@ -15,7 +15,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use tulisp::{Error, TulispContext, TulispObject};
-use tulisp_async::{NilOr, TokioExecutor};
+use tulisp_async::{Handle, NilOr, TokioExecutor};
+
+// Compile-time guarantee: Handle is freely movable/shareable across
+// tokio tasks. Catches a future regression where someone adds a
+// non-Send field.
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    const fn assert_sync<T: Sync>() {}
+    assert_send::<Handle>();
+    assert_sync::<Handle>();
+};
 
 fn setup() -> TulispContext {
     let mut ctx = TulispContext::new();
