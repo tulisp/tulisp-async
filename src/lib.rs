@@ -1,8 +1,8 @@
 #![doc = include_str!("../README.md")]
 
 use std::fmt;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tulisp::{Error, Shared, TulispContext, TulispConvertible, TulispObject, TulispValue};
@@ -95,52 +95,6 @@ impl TulispConvertible for TimerHandle {
 
     fn into_tulisp(self) -> TulispObject {
         TulispValue::from(Shared::new(self)).into_ref(None)
-    }
-}
-
-/// Recursive re-scheduling for repeating timers. Each firing fires `f`
-/// and, if `repeat` is set and we haven't been cancelled, schedules the
-/// next firing. One context per timer, reused across firings under a
-/// `Mutex` so we don't pay `TulispContext::new()` on every tick.
-fn schedule_timer(
-    executor: Arc<dyn Executor>,
-    handle: TimerHandle,
-    task_ctx: Arc<Mutex<TulispContext>>,
-    delay: Duration,
-    repeat: Option<Duration>,
-    f: TulispObject,
-) {
-    let executor_inner = executor.clone();
-    executor.schedule_after(
-        delay,
-        Box::new(move || {
-            if handle.is_cancelled() {
-                return;
-            }
-            let fire_result = {
-                let mut ctx = task_ctx.lock().unwrap();
-                ctx.funcall(&f, &TulispObject::nil())
-            };
-            if let Err(e) = fire_result {
-                log_timer_error(&task_ctx, &e);
-            }
-            if handle.is_cancelled() {
-                return;
-            }
-            if let Some(interval) = repeat {
-                schedule_timer(executor_inner, handle, task_ctx, interval, Some(interval), f);
-            }
-        }),
-    );
-}
-
-fn log_timer_error(task_ctx: &Mutex<TulispContext>, e: &Error) {
-    // `Error::format` needs the ctx for backtrace symbol resolution.
-    // If a previous firing panicked we can't lock — fall back to the
-    // raw error so we still surface something rather than wedging.
-    match task_ctx.lock() {
-        Ok(ctx) => eprintln!("run-with-timer: {}", e.format(&ctx)),
-        Err(_) => eprintln!("run-with-timer: {e} (ctx mutex poisoned)"),
     }
 }
 
