@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use tulisp::{Error, Shared, TulispContext, TulispConvertible, TulispObject, TulispValue};
 
+mod pending;
+
 #[cfg(feature = "tokio")]
 mod tokio;
 #[cfg(feature = "tokio")]
