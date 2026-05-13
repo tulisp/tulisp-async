@@ -32,7 +32,6 @@ pub(crate) struct PendingTask {
 /// firing body needs to be visible to the same draining loop.
 pub(crate) type Mailbox = Arc<Mutex<Vec<PendingTask>>>;
 
-#[allow(dead_code)]
 pub(crate) fn new_mailbox() -> Mailbox {
     Arc::new(Mutex::new(Vec::new()))
 }
@@ -65,7 +64,6 @@ fn earliest_pending(tasks: &[PendingTask]) -> Option<usize> {
 /// continues. The body itself can cancel the timer (via
 /// `cancel-timer`) or register more timers; both are observed in the
 /// next iteration.
-#[allow(dead_code)]
 pub(crate) fn drain_until(
     ctx: &mut TulispContext,
     mailbox: &Mailbox,

@@ -154,18 +154,24 @@ fn is_timer_handle(v: &TulispObject) -> bool {
 }
 
 /// Wire `timerp`, `sleep-for`, `run-with-timer`, and `cancel-timer` into
-/// `ctx`, all backed by `executor`.
+/// `ctx`, all backed by `executor`. Each call sets up a fresh
+/// pending-firings mailbox shared by these four builtins via closure
+/// capture — `(run-with-timer …)` pushes, `(sleep-for …)` drains.
 pub fn register(ctx: &mut TulispContext, executor: Arc<dyn Executor>) {
+    let mailbox = pending::new_mailbox();
+
     ctx.defun("timerp", |v: TulispObject| is_timer_handle(&v));
 
     let exec_sleep = executor.clone();
-    ctx.defun("sleep-for", move |secs: f64| {
+    let mb_sleep = mailbox.clone();
+    ctx.defun("sleep-for", move |ctx: &mut TulispContext, secs: f64| {
         if !secs.is_finite() || secs < 0.0 {
             return Err(Error::out_of_range(format!(
                 "sleep-for: invalid duration: {secs}"
             )));
         }
-        exec_sleep.sleep_blocking(Duration::from_secs_f64(secs));
+        let wake = std::time::Instant::now() + Duration::from_secs_f64(secs);
+        pending::drain_until(ctx, &mb_sleep, &*exec_sleep, wake);
         Ok::<_, Error>(TulispObject::nil())
     });
 
