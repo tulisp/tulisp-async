@@ -65,11 +65,16 @@ impl TimerHandle {
     }
 
     fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Relaxed);
+        // `Release` pairs with `Acquire` in `is_cancelled` so a cross-
+        // thread cancel — e.g. a Rust task that holds a clone of the
+        // handle and flips it from outside the lisp thread — is
+        // guaranteed to be observed by the drain loop's post-fire
+        // re-check.
+        self.cancelled.store(true, Ordering::Release);
     }
 
     fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Relaxed)
+        self.cancelled.load(Ordering::Acquire)
     }
 }
 
