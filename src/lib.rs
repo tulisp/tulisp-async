@@ -175,6 +175,17 @@ impl Handle {
 /// The returned [`Handle`] keeps a reference to the same mailbox so
 /// Rust-side callers can `tick` the queue without going through lisp.
 /// Callers that only drive timers from lisp can ignore the return.
+///
+/// # Re-registering
+///
+/// `register` should be called **at most once per context.** A second
+/// call overwrites the `sleep-for` / `run-with-timer` / `cancel-timer`
+/// bindings with closures that point at a fresh mailbox — any timer
+/// already pending under the first mailbox stays alive but becomes
+/// unreachable from lisp (since the new `sleep-for` drains a different
+/// queue). The first [`Handle`] can still tick those orphans; if you
+/// don't keep it around, they're effectively leaked until the `Arc`
+/// chain unwinds at process exit.
 pub fn register(ctx: &mut TulispContext, executor: Arc<dyn Executor>) -> Handle {
     let mailbox = pending::new_mailbox();
 
