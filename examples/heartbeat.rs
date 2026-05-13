@@ -1,9 +1,9 @@
 //! Run: `cargo run --example heartbeat`
 //!
 //! Demonstrates a repeating `run-with-timer` that cancels itself from
-//! its own body once a target firing count is reached. Timer firings
-//! run on the host's thread pool, so a thousand idle timers wouldn't
-//! cost a thousand threads — only a few are scheduled at a time.
+//! its own body once a target firing count is reached. Firings run on
+//! the calling lisp thread as the `(sleep-for …)` below drains the
+//! timer queue — Emacs's main-loop shape.
 
 use std::sync::Arc;
 

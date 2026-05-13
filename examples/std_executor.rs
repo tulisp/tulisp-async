@@ -4,9 +4,10 @@
 //! implements [`Executor`] using only `std::thread`, so it builds with
 //! `--no-default-features` (no tokio).
 //!
-//! `schedule_after` is intentionally naive here — one thread per
-//! scheduled firing — to keep the example self-contained. A real
-//! implementation would pool, the way `TokioExecutor` does.
+//! Timer firings drive off the main thread via `(sleep-for …)`, so the
+//! executor only needs to know how to park the calling thread —
+//! `schedule_after` is unused by the timer builtins but still on the
+//! trait for non-lisp embedders.
 
 use std::sync::Arc;
 use std::thread;

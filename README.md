@@ -51,9 +51,11 @@ cargo run --example sleep
 | `(run-with-timer SECS REPEAT FN)` | Fire `FN` after `SECS`; if `REPEAT` is a number, re-fire every `REPEAT` seconds. Returns a timer handle. |
 | `(cancel-timer H)` | Stop further firings of timer `H`. |
 
-Parent-defined `defun`s and `setq`'d globals are visible inside timer
-bodies — each timer runs in a fresh `TulispContext`, but tulisp
-symbols carry their global bindings independently of the context.
+Timer bodies funcall on the calling `TulispContext` — the same one
+the parent program runs on, so defuns, defvars, load state, and
+error-trace filenames all carry through. `(sleep-for …)` drains
+pending firings in deadline order while it waits, matching Emacs's
+main-loop behavior.
 
 ## Features
 
@@ -71,19 +73,22 @@ behind a feature here, mirroring `src/tokio.rs`).
 
 ## Design notes
 
-- **Timers are pool-backed.** `run-with-timer` schedules through
-  `Executor::schedule_after`, so a thousand idle timers don't cost a
-  thousand threads.
+- **Same-context firings.** `run-with-timer` pushes a pending firing
+  onto a per-`register` mailbox; the drain helpers funcall the body on
+  the calling `&mut ctx`. No fork, no `Arc<Mutex<TulispContext>>`.
+- **Drained from `(sleep-for …)` or `Handle::tick`.** A program that
+  registers a timer and immediately returns to Rust without ticking
+  will not fire it. Either call `(sleep-for …)` (drains while waiting)
+  or `Handle::tick(&mut ctx)` from Rust.
 - **Runtime-agnostic core.** No tokio types appear in the public API
   outside the `tokio` module.
 
 ## Footguns
 
-- `(setq x (1+ x))` from concurrent timer bodies is **not atomic**.
-  Tulisp's per-symbol read and write are thread-safe under `sync`, but
-  read-modify-write is racy. For shared counters, use a Rust-backed
-  defun over an atomic, or serialize updates through a single dedicated
-  timer.
+- **Long-running bodies stall the rest of the queue.** Firings are
+  serialized on the calling lisp thread, so a body that takes longer
+  than the next deadline shifts subsequent firings later. Same shape
+  as Emacs's main loop blocking on a slow command.
 
 ## Testing
 

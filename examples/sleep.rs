@@ -1,8 +1,9 @@
 //! Run: `cargo run --example sleep` (tokio feature is on by default)
 //!
 //! Schedules two one-shot timers and lets them fire while the main
-//! thread sleeps. Demonstrates that timer firings happen on the
-//! executor's pool, not on the calling thread.
+//! thread sleeps inside `(sleep-for …)`. The drain loop wakes up at
+//! each deadline, funcalls the body on the calling ctx, and goes back
+//! to sleep — single-threaded firing in deadline order.
 
 use std::sync::Arc;
 use std::time::Instant;
