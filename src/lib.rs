@@ -175,7 +175,7 @@ pub fn register(ctx: &mut TulispContext, executor: Arc<dyn Executor>) {
         Ok::<_, Error>(TulispObject::nil())
     });
 
-    let exec_timer = executor.clone();
+    let mb_timer = mailbox.clone();
     ctx.defun(
         "run-with-timer",
         move |secs: f64, repeat: NilOr<f64>, f: TulispObject| {
@@ -190,16 +190,12 @@ pub fn register(ctx: &mut TulispContext, executor: Arc<dyn Executor>) {
                 Some(r) => Some(Duration::from_secs_f64(r)),
             };
             let handle = TimerHandle::new();
-            let mut task_ctx = TulispContext::new();
-            register(&mut task_ctx, exec_timer.clone());
-            schedule_timer(
-                exec_timer.clone(),
-                handle.clone(),
-                Arc::new(Mutex::new(task_ctx)),
-                Duration::from_secs_f64(secs),
+            mb_timer.lock().unwrap().push(pending::PendingTask {
+                deadline: std::time::Instant::now() + Duration::from_secs_f64(secs),
                 repeat,
-                f,
-            );
+                body: f,
+                cancel: handle.clone(),
+            });
             Ok::<_, Error>(handle)
         },
     );

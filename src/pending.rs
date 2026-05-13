@@ -18,7 +18,6 @@ use crate::{Executor, TimerHandle};
 /// `Instant` the body should be funcalled at. For one-shot timers
 /// `repeat` is `None`; for repeating timers it's the interval, and the
 /// driver re-pushes the task with `deadline + repeat` after each firing.
-#[allow(dead_code)]
 pub(crate) struct PendingTask {
     pub(crate) deadline: Instant,
     pub(crate) repeat: Option<Duration>,
