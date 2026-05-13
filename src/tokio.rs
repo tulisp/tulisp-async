@@ -40,15 +40,6 @@ impl Executor for TokioExecutor {
         });
         let _ = rx.recv();
     }
-
-    fn schedule_after(&self, dur: Duration, body: Box<dyn FnOnce() + Send + 'static>) {
-        self.handle.spawn(async move {
-            tokio::time::sleep(dur).await;
-            // Hop to the blocking pool — `body` may call into lisp, which
-            // can block on `sleep-for` or a timer Mutex.
-            tokio::task::spawn_blocking(body);
-        });
-    }
 }
 
 /// Async counterpart to `pending::drain_until`. Awaits each task's

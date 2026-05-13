@@ -41,14 +41,11 @@ impl<T: TulispConvertible> TulispConvertible for NilOr<T> {
 /// the `tokio` feature; other runtimes can implement this trait to reuse
 /// the same lisp-visible primitives.
 pub trait Executor: Send + Sync + 'static {
-    /// Park the calling thread for `dur`, integrating with the host's
-    /// timer wheel if it has one.
+    /// Park the calling thread for `dur`. The drain helpers call this
+    /// between firings to wait for the next deadline; an implementation
+    /// is free to use `std::thread::sleep`, a runtime-driven timer, or
+    /// any other mechanism that blocks the calling thread.
     fn sleep_blocking(&self, dur: Duration);
-
-    /// Schedule `body` to run once after `dur` on the host's thread pool.
-    /// `run-with-timer` relies on this to keep thread count bounded when
-    /// there are many active timers.
-    fn schedule_after(&self, dur: Duration, body: Box<dyn FnOnce() + Send + 'static>);
 }
 
 // -- timer handle -------------------------------------------------------
