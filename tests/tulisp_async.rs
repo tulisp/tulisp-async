@@ -200,6 +200,36 @@ async fn timerp_rejects_other_values() {
     }
 }
 
+// -- Handle::tick -------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tick_fires_due_timers_without_sleep_for() {
+    let mut ctx = TulispContext::new();
+    let handle = tulisp_async::register(&mut ctx, Arc::new(TokioExecutor::new()));
+    eval_ok(&mut ctx, "(setq counter 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0 nil (lambda () (setq counter (1+ counter))))",
+    );
+    // No (sleep-for …) — drive from Rust instead.
+    handle.tick(&mut ctx);
+    assert_eq!(eval_i64(&mut ctx, "counter"), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tick_leaves_future_timers_pending() {
+    let mut ctx = TulispContext::new();
+    let handle = tulisp_async::register(&mut ctx, Arc::new(TokioExecutor::new()));
+    eval_ok(&mut ctx, "(setq counter 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 10 nil (lambda () (setq counter (1+ counter))))",
+    );
+    handle.tick(&mut ctx);
+    // Timer is 10s out — tick must return immediately without firing.
+    assert_eq!(eval_i64(&mut ctx, "counter"), 0);
+}
+
 // -- NilOr<T> -----------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]

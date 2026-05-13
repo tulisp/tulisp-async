@@ -107,11 +107,36 @@ fn is_timer_handle(v: &TulispObject) -> bool {
         .unwrap_or(false)
 }
 
+/// Handle returned by [`register`] that lets non-lisp callers drive
+/// the timer queue from Rust. The same mailbox the lisp builtins use
+/// is captured here, so a `(run-with-timer …)` from lisp and a
+/// [`tick`](Self::tick) from Rust see the same set of pending firings.
+pub struct Handle {
+    mailbox: pending::Mailbox,
+    executor: Arc<dyn Executor>,
+}
+
+impl Handle {
+    /// Fire every timer body whose deadline has already passed, in
+    /// deadline order, against the calling `&mut ctx`. Returns as soon
+    /// as no more firings are due. Repeating timers re-enter the queue
+    /// with their next deadline, but `tick` does not block waiting for
+    /// that next firing — call again after time has elapsed, or use
+    /// `(sleep-for …)` from lisp, which drains while it waits.
+    pub fn tick(&self, ctx: &mut TulispContext) {
+        pending::drain_until(ctx, &self.mailbox, &*self.executor, std::time::Instant::now());
+    }
+}
+
 /// Wire `timerp`, `sleep-for`, `run-with-timer`, and `cancel-timer` into
 /// `ctx`, all backed by `executor`. Each call sets up a fresh
 /// pending-firings mailbox shared by these four builtins via closure
 /// capture — `(run-with-timer …)` pushes, `(sleep-for …)` drains.
-pub fn register(ctx: &mut TulispContext, executor: Arc<dyn Executor>) {
+///
+/// The returned [`Handle`] keeps a reference to the same mailbox so
+/// Rust-side callers can `tick` the queue without going through lisp.
+/// Callers that only drive timers from lisp can ignore the return.
+pub fn register(ctx: &mut TulispContext, executor: Arc<dyn Executor>) -> Handle {
     let mailbox = pending::new_mailbox();
 
     ctx.defun("timerp", |v: TulispObject| is_timer_handle(&v));
@@ -158,4 +183,6 @@ pub fn register(ctx: &mut TulispContext, executor: Arc<dyn Executor>) {
         h.cancel();
         Ok::<_, Error>(TulispObject::nil())
     });
+
+    Handle { mailbox, executor }
 }

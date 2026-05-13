@@ -70,15 +70,11 @@ pub(crate) fn drain_until(
     wake: Instant,
 ) {
     loop {
-        let now = Instant::now();
-        if now >= wake {
-            return;
-        }
-
         // Lock just long enough to reap cancelled entries and pop the
-        // next firing. The body itself can re-enter the mailbox (e.g.,
-        // by calling `run-with-timer` or a nested `sleep-for`), so we
-        // never hold the lock across `funcall` or `sleep_blocking`.
+        // next firing whose deadline falls before `wake`. The body
+        // itself can re-enter the mailbox (e.g., by calling
+        // `run-with-timer` or a nested `sleep-for`), so we never hold
+        // the lock across `funcall` or `sleep_blocking`.
         let popped = {
             let mut tasks = mailbox.lock().unwrap();
             tasks.retain(|t| !t.cancel.is_cancelled());
@@ -88,8 +84,15 @@ pub(crate) fn drain_until(
             }
         };
 
+        // No more due-before-wake firings. Sleep out any remaining
+        // window (so `(sleep-for 1)` still parks for ~1s when no
+        // timers fire) and return. `tick`'s `wake == now` case
+        // skips this sleep because the saturating subtraction is 0.
         let Some(task) = popped else {
-            executor.sleep_blocking(wake - now);
+            let now = Instant::now();
+            if now < wake {
+                executor.sleep_blocking(wake - now);
+            }
             return;
         };
 
