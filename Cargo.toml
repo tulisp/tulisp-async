@@ -27,5 +27,10 @@ path = "examples/heartbeat.rs"
 required-features = ["tokio"]
 
 [[example]]
+name = "channel"
+path = "examples/channel.rs"
+required-features = ["tokio"]
+
+[[example]]
 name = "std_executor"
 path = "examples/std_executor.rs"
