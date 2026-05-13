@@ -4,8 +4,10 @@
 //!
 //! Single mailbox per [`register`](crate::register) call, shared by
 //! closure-capture between every builtin that needs to read or write
-//! it. Mutation is gated by a `Mutex` so a `(run-with-timer …)` called
-//! from inside a firing body sees a consistent view.
+//! it. The `Mutex` serializes the read-modify-write of the queue
+//! (reap-cancelled + pop-earliest, push-on-repeat), so a
+//! `(run-with-timer …)` called from inside a firing body, or a
+//! nested `(sleep-for …)`, sees a consistent view.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

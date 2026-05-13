@@ -47,15 +47,34 @@ cargo run --example sleep
 | Form | Description |
 | --- | --- |
 | `(timerp X)` | Predicate: `t` if `X` is a timer handle, else `nil`. |
-| `(sleep-for SECS)` | Park the current lisp thread for `SECS` seconds. |
-| `(run-with-timer SECS REPEAT FN)` | Fire `FN` after `SECS`; if `REPEAT` is a number, re-fire every `REPEAT` seconds. Returns a timer handle. |
-| `(cancel-timer H)` | Stop further firings of timer `H`. |
+| `(sleep-for SECS)` | Park the current lisp thread for `SECS` seconds, draining due timers along the way. |
+| `(run-with-timer SECS REPEAT FN &rest ARGS)` | Fire `(FN ARGS…)` after `SECS`; if `REPEAT` is a positive number, re-fire every `REPEAT` seconds. `nil`, `0`, or any non-positive `REPEAT` means one-shot. Returns a timer handle. |
+| `(cancel-timer H)` | Stop further firings of timer `H`. Returns `nil`. |
 
 Timer bodies funcall on the calling `TulispContext` — the same one
 the parent program runs on, so defuns, defvars, load state, and
 error-trace filenames all carry through. `(sleep-for …)` drains
 pending firings in deadline order while it waits, matching Emacs's
 main-loop behavior.
+
+## Driving from Rust
+
+`register` returns a `Handle` that lets non-lisp callers drive the
+timer queue without going through `(sleep-for …)`. Three methods:
+
+- `handle.tick(&mut ctx)` — sync. Fires every body whose deadline has
+  already passed; returns immediately when none remain.
+- `handle.run_until_idle(&mut ctx).await` — async (tokio feature).
+  Awaits each task's deadline via `tokio::time::sleep`, fires, repeats
+  until the mailbox is empty. Repeating timers re-push themselves, so
+  the future runs until every timer self-cancels.
+- `handle.run_for(&mut ctx, dur).await` — async (tokio feature). Same
+  drain loop but bounded — returns after `dur` regardless of pending
+  firings beyond that window.
+
+`Handle` is `Clone` (shallow — clones share the same mailbox) and
+`Send + Sync`, so it can travel into a spawned tokio task that
+wants to tick the queue from elsewhere.
 
 ## Features
 
