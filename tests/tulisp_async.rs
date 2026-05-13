@@ -119,8 +119,10 @@ async fn timer_cancel_stops_repeats() {
     let at_cancel = eval_i64(&mut ctx, "counter");
     eval_ok(&mut ctx, "(sleep-for 0.3)");
     let later = eval_i64(&mut ctx, "counter");
-    // Allow one in-flight firing to win the cancellation race.
-    assert!(later <= at_cancel + 1, "at_cancel = {at_cancel}, later = {later}");
+    // Same-thread firing: cancel can't race a body. The drain loop
+    // pops one task at a time, the cancel happens between firings,
+    // and the post-fire check stops the re-push.
+    assert_eq!(later, at_cancel, "at_cancel = {at_cancel}, later = {later}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -148,11 +150,11 @@ async fn timer_zero_repeat_does_not_repeat() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn timer_many_pool_backed() {
-    // 50 one-shot timers firing concurrently on the blocking pool. Uses a
-    // Rust atomic because a lisp-level `(setq counter (1+ counter))`
-    // isn't atomic across threads — the point here is that the plumbing
-    // survives the fan-out, not that tulisp linearizes sets.
+async fn timer_many_one_shot() {
+    // 50 one-shot timers all due at ~the same instant. The drain loop
+    // fires them sequentially on the lisp thread; checks via a Rust
+    // atomic just to keep the assertion thread-safe — same-thread
+    // increments would be fine too.
     let mut ctx = setup();
     let counter = Arc::new(AtomicUsize::new(0));
     let c = counter.clone();
