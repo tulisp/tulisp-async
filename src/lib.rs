@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use tulisp::{Error, Shared, TulispContext, TulispConvertible, TulispObject, TulispValue};
+use tulisp::{Error, Rest, Shared, TulispContext, TulispConvertible, TulispObject, TulispValue};
 
 mod pending;
 
@@ -196,7 +196,7 @@ pub fn register(ctx: &mut TulispContext, executor: Arc<dyn Executor>) -> Handle 
     let mb_timer = mailbox.clone();
     ctx.defun(
         "run-with-timer",
-        move |secs: f64, repeat: NilOr<f64>, f: TulispObject| {
+        move |secs: f64, repeat: NilOr<f64>, f: TulispObject, args: Rest<TulispObject>| {
             if !secs.is_finite() || secs < 0.0 {
                 return Err(Error::out_of_range(format!(
                     "run-with-timer: invalid secs: {secs}"
@@ -212,6 +212,7 @@ pub fn register(ctx: &mut TulispContext, executor: Arc<dyn Executor>) -> Handle 
                 deadline: std::time::Instant::now() + Duration::from_secs_f64(secs),
                 repeat,
                 body: f,
+                args: args.into(),
                 cancel: handle.clone(),
             });
             Ok::<_, Error>(handle)

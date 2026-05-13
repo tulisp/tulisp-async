@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use tulisp::{TulispContext, TulispObject};
+use tulisp::TulispContext;
 
 use crate::Executor;
 use crate::pending::{self, Mailbox, PendingTask};
@@ -81,7 +81,7 @@ pub(crate) async fn run_until(
         if task.cancel.is_cancelled() {
             continue;
         }
-        if let Err(e) = ctx.funcall(&task.body, &TulispObject::nil()) {
+        if let Err(e) = ctx.funcall(&task.body, &task.args) {
             eprintln!("run-with-timer: {}", e.format(ctx));
         }
         if task.cancel.is_cancelled() {
@@ -92,6 +92,7 @@ pub(crate) async fn run_until(
                 deadline: task.deadline + repeat,
                 repeat: Some(repeat),
                 body: task.body,
+                args: task.args,
                 cancel: task.cancel,
             });
         }

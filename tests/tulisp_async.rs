@@ -181,6 +181,36 @@ async fn timer_many_one_shot() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn run_with_timer_passes_rest_args() {
+    let mut ctx = setup();
+    eval_ok(&mut ctx, "(setq result nil)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0.02 nil \
+           (lambda (a b) (setq result (list a b))) \
+           'hello 42)",
+    );
+    eval_ok(&mut ctx, "(sleep-for 0.1)");
+    let res = eval_ok(&mut ctx, "result");
+    assert_eq!(format!("{res}"), "(hello 42)");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_with_timer_no_args_calls_body_with_nil() {
+    // Pre-existing behavior: no &rest args → body funcalled with no
+    // arguments. Sanity check that adding the args field didn't
+    // regress the zero-args path.
+    let mut ctx = setup();
+    eval_ok(&mut ctx, "(setq fired nil)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0.02 nil (lambda () (setq fired t)))",
+    );
+    eval_ok(&mut ctx, "(sleep-for 0.1)");
+    assert_eq!(format!("{}", eval_ok(&mut ctx, "fired")), "t");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn run_with_timer_invalid_secs_errors() {
     let mut ctx = setup();
     let err = eval(&mut ctx, "(run-with-timer -1 nil (lambda () nil))").unwrap_err();
