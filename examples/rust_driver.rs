@@ -2,14 +2,13 @@
 //!
 //! The mirror of `channel.rs`: lisp produces, Rust consumes. A lisp
 //! timer fires once a second and pushes a message into an mpsc
-//! channel via a Rust-backed `(send-msg X)` defun. A separate tokio
-//! task reads and prints. The main task drives the timer queue from
-//! Rust via `Handle::tick` while awaiting on its own loop, so neither
-//! `(sleep-for …)` on the lisp side nor a tokio block on the main
-//! task is needed.
+//! channel via a Rust-backed `(send-msg X)` defun; the body cancels
+//! itself after four firings. A separate tokio task reads and prints.
+//! The main task drives the timer queue with one `await` — no
+//! `(sleep-for …)` on the lisp side, no manual sleep loop on the
+//! Rust side.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tulisp::{Error, TulispContext, TulispObject};
@@ -39,27 +38,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ctx.eval_string(
         r#"
 (setq tick 0)
-(run-with-timer 1 1
-  (lambda ()
-    (setq tick (1+ tick))
-    (send-msg (format "tick %d" tick))))
+(setq h (run-with-timer 1 1
+          (lambda ()
+            (setq tick (1+ tick))
+            (send-msg (format "tick %d" tick))
+            (when (>= tick 4) (cancel-timer h)))))
 "#,
     )
     .map_err(|e| format!("lisp error:\n{}", e.format(&ctx)))?;
 
-    // Drive the lisp timer queue from Rust async. Between ticks we
-    // yield to the runtime — that's what lets the reader task above
-    // make progress. ~4.5s, so we capture four firings.
-    for _ in 0..45 {
-        handle.tick(&mut ctx);
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    // One await drives the queue. Returns when the timer body cancels
+    // itself and the mailbox empties.
+    handle.run_until_idle(&mut ctx).await;
 
     // Close the channel so the reader exits: the sender lives inside
-    // `send-msg`'s closure (held by the ctx) AND inside the lambda
-    // body's compiled `RustCallTyped` instruction (held by the timer
-    // task, which the mailbox in `handle` keeps alive). Drop both
-    // before awaiting.
+    // the `send-msg` defun closure (and in the lambda's compiled
+    // `RustCallTyped`, still referenced from `h`). Drop the ctx and
+    // the handle so every closure is released.
     drop(handle);
     drop(ctx);
     let _ = reader.await;
