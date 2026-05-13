@@ -287,6 +287,17 @@ async fn timerp_detects_timer_handle() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn timer_handles_display_distinct_ids() {
+    let mut ctx = setup();
+    let a = eval_ok(&mut ctx, "(run-with-timer 10 nil (lambda () nil))");
+    let b = eval_ok(&mut ctx, "(run-with-timer 10 nil (lambda () nil))");
+    let sa = format!("{a}");
+    let sb = format!("{b}");
+    assert!(sa.starts_with("#<timer-handle ") && sa.ends_with('>'), "sa = {sa}");
+    assert_ne!(sa, sb, "expected distinct ids: {sa} vs {sb}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn timerp_rejects_other_values() {
     let mut ctx = setup();
     for expr in ["nil", "42", "\"hi\"", "'sym"] {

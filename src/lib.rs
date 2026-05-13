@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use tulisp::{Error, Shared, TulispContext, TulispConvertible, TulispObject, TulispValue};
@@ -54,12 +54,21 @@ pub trait Executor: Send + Sync + 'static {
 /// `(cancel-timer …)`.
 #[derive(Clone)]
 pub struct TimerHandle {
+    /// Process-wide-unique id assigned at construction. Surfaced via
+    /// `Display` so debug prints can tell handles apart without
+    /// pointer-chasing the cancel flag.
+    id: u64,
     cancelled: Arc<AtomicBool>,
 }
+
+/// Next id to hand out. Plain `Relaxed` fetch_add is sufficient — we
+/// only need atomicity, not happens-before ordering between threads.
+static NEXT_TIMER_ID: AtomicU64 = AtomicU64::new(1);
 
 impl TimerHandle {
     fn new() -> Self {
         Self {
+            id: NEXT_TIMER_ID.fetch_add(1, Ordering::Relaxed),
             cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -80,7 +89,7 @@ impl TimerHandle {
 
 impl fmt::Display for TimerHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "#<timer-handle>")
+        write!(f, "#<timer-handle {}>", self.id)
     }
 }
 
