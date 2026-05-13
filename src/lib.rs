@@ -126,6 +126,18 @@ impl Handle {
     pub fn tick(&self, ctx: &mut TulispContext) {
         pending::drain_until(ctx, &self.mailbox, &*self.executor, std::time::Instant::now());
     }
+
+    /// Drive the timer queue asynchronously, awaiting each task's
+    /// deadline via `tokio::time::sleep`, until the mailbox has no
+    /// live entries left. Repeating timers re-push themselves, so
+    /// this future does not return until every timer has been
+    /// cancelled (typically from inside a body via `cancel-timer`).
+    /// Drop the returned future or `select!` against a shutdown
+    /// signal to stop earlier.
+    #[cfg(feature = "tokio")]
+    pub async fn run_until_idle(&self, ctx: &mut TulispContext) {
+        crate::tokio::run_until_idle(ctx, &self.mailbox).await
+    }
 }
 
 /// Wire `timerp`, `sleep-for`, `run-with-timer`, and `cancel-timer` into

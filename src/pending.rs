@@ -39,7 +39,7 @@ pub(crate) fn new_mailbox() -> Mailbox {
 /// entry is cancelled (or the queue is empty). Cancelled-but-not-yet-
 /// reaped entries are skipped here; the drain loop sweeps them on
 /// its own schedule rather than walking the queue per cancel.
-fn earliest_pending(tasks: &[PendingTask]) -> Option<usize> {
+pub(crate) fn earliest_pending(tasks: &[PendingTask]) -> Option<usize> {
     tasks
         .iter()
         .enumerate()

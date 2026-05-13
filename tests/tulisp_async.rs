@@ -217,6 +217,36 @@ async fn tick_fires_due_timers_without_sleep_for() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn run_until_idle_drains_self_cancelling_timer() {
+    let mut ctx = TulispContext::new();
+    let handle = tulisp_async::register(&mut ctx, Arc::new(TokioExecutor::new()));
+    eval_ok(&mut ctx, "(setq counter 0)");
+    eval_ok(
+        &mut ctx,
+        "(setq h (run-with-timer 0.02 0.02 \
+                   (lambda () \
+                     (setq counter (1+ counter)) \
+                     (when (>= counter 3) (cancel-timer h)))))",
+    );
+    let start = Instant::now();
+    handle.run_until_idle(&mut ctx).await;
+    let elapsed = start.elapsed();
+    assert_eq!(eval_i64(&mut ctx, "counter"), 3);
+    // Each fire awaits ~20ms; three fires + bookkeeping ≈ 60ms.
+    assert!(elapsed < Duration::from_millis(500), "elapsed = {elapsed:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_until_idle_returns_on_empty_mailbox() {
+    let mut ctx = TulispContext::new();
+    let handle = tulisp_async::register(&mut ctx, Arc::new(TokioExecutor::new()));
+    // No timers registered — should return immediately.
+    let start = Instant::now();
+    handle.run_until_idle(&mut ctx).await;
+    assert!(start.elapsed() < Duration::from_millis(50));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tick_leaves_future_timers_pending() {
     let mut ctx = TulispContext::new();
     let handle = tulisp_async::register(&mut ctx, Arc::new(TokioExecutor::new()));
