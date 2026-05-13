@@ -187,6 +187,90 @@ async fn run_with_timer_invalid_secs_errors() {
     assert!(err.contains("invalid secs"), "err = {err}");
 }
 
+// -- body re-entrancy ---------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn timer_body_error_does_not_stop_repeats() {
+    let mut ctx = setup();
+    eval_ok(&mut ctx, "(setq counter 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0.02 0.02 \
+           (lambda () \
+             (setq counter (1+ counter)) \
+             (when (= counter 1) (error \"oops\"))))",
+    );
+    eval_ok(&mut ctx, "(sleep-for 0.15)");
+    let fired = eval_i64(&mut ctx, "counter");
+    // First firing errors after incrementing; the repeating timer
+    // must keep firing on subsequent deadlines (drain catches and
+    // logs, doesn't unwind).
+    assert!(fired >= 3, "counter = {fired}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nested_sleep_for_drains_outer_timers() {
+    // Outer schedules a, b, c at 0.05 / 0.10 / 0.12. b's body
+    // (sleep-for 0.05) runs at 0.10–0.15; during that nested wait,
+    // c (deadline 0.12) must fire on the same ctx — Emacs's
+    // sit-for-while-sit-for behavior.
+    let mut ctx = setup();
+    eval_ok(&mut ctx, "(setq trace '())");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0.05 nil (lambda () (setq trace (cons 'a trace))))",
+    );
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0.10 nil \
+           (lambda () \
+             (setq trace (cons 'b-start trace)) \
+             (sleep-for 0.05) \
+             (setq trace (cons 'b-end trace))))",
+    );
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0.12 nil (lambda () (setq trace (cons 'c trace))))",
+    );
+    eval_ok(&mut ctx, "(sleep-for 0.25)");
+    let trace = eval_ok(&mut ctx, "(reverse trace)");
+    assert_eq!(format!("{trace}"), "(a b-start c b-end)");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_with_timer_from_body_schedules_more() {
+    // Body of parent schedules a child timer; the outer drain must
+    // see the new task on its next iteration and fire it.
+    let mut ctx = setup();
+    eval_ok(&mut ctx, "(setq trace '())");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0.05 nil \
+           (lambda () \
+             (setq trace (cons 'parent trace)) \
+             (run-with-timer 0.05 nil \
+               (lambda () (setq trace (cons 'child trace))))))",
+    );
+    eval_ok(&mut ctx, "(sleep-for 0.2)");
+    let trace = eval_ok(&mut ctx, "(reverse trace)");
+    assert_eq!(format!("{trace}"), "(parent child)");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sleep_for_zero_drains_due_tasks() {
+    // wake = now case via lisp's (sleep-for 0) — companion to
+    // tick_fires_due_timers_without_sleep_for which exercises the
+    // same path through Handle::tick.
+    let mut ctx = setup();
+    eval_ok(&mut ctx, "(setq counter 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0 nil (lambda () (setq counter (1+ counter))))",
+    );
+    eval_ok(&mut ctx, "(sleep-for 0)");
+    assert_eq!(eval_i64(&mut ctx, "counter"), 1);
+}
+
 // -- predicates ---------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
