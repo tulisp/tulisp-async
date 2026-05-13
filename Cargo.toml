@@ -4,17 +4,20 @@ version = "0.1.0"
 edition = "2024"
 description = "Runtime-agnostic async primitives for tulisp."
 license = "GPL-3.0"
+rust-version = "1.88.0"
 
 [dependencies]
 tulisp = { git = "https://github.com/shsms/tulisp", branch = "fmt", features = ["sync"] }
-tokio = { version = "1", features = ["rt", "time", "sync"], optional = true }
+tokio = { version = "1", features = ["rt", "time"], optional = true }
 
 [features]
 default = ["tokio"]
 tokio = ["dep:tokio"]
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# `sync` is for `tokio::sync::mpsc` in the channel/rust_driver examples;
+# the library proper doesn't need it.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 
 [[example]]
 name = "sleep"
