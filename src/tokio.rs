@@ -45,18 +45,34 @@ impl Executor for TokioExecutor {
 /// Async counterpart to `pending::drain_until`. Awaits each task's
 /// deadline via `tokio::time::sleep` instead of parking the calling
 /// thread, fires the body on `ctx`, and returns when the mailbox has
-/// no live entries left. Repeating timers re-push themselves, so a
-/// caller that doesn't want this future to run forever must arrange
-/// for every timer to cancel itself eventually (or `select!` against
-/// an external shutdown signal).
-pub(crate) async fn run_until_idle(ctx: &mut TulispContext, mailbox: &Mailbox) {
+/// no live entries left (`wake = None`) or when `wake` is reached
+/// (`wake = Some(t)`). Repeating timers re-push themselves, so a
+/// caller that picks `None` must arrange for every timer to cancel
+/// itself eventually.
+pub(crate) async fn run_until(
+    ctx: &mut TulispContext,
+    mailbox: &Mailbox,
+    wake: Option<Instant>,
+) {
     loop {
         let popped = {
             let mut tasks = mailbox.lock().unwrap();
             tasks.retain(|t| !t.cancel.is_cancelled());
-            pending::earliest_pending(&tasks).map(|i| tasks.remove(i))
+            match pending::earliest_pending(&tasks) {
+                Some(i) if wake.is_none_or(|w| tasks[i].deadline <= w) => Some(tasks.remove(i)),
+                _ => None,
+            }
         };
-        let Some(task) = popped else { return; };
+
+        let Some(task) = popped else {
+            if let Some(w) = wake {
+                let now = Instant::now();
+                if now < w {
+                    tokio::time::sleep(w - now).await;
+                }
+            }
+            return;
+        };
 
         let now = Instant::now();
         if task.deadline > now {

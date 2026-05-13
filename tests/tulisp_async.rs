@@ -249,6 +249,28 @@ async fn run_until_idle_drains_self_cancelling_timer() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn run_for_fires_window_and_returns() {
+    let mut ctx = TulispContext::new();
+    let handle = tulisp_async::register(&mut ctx, Arc::new(TokioExecutor::new()));
+    eval_ok(&mut ctx, "(setq counter 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0.02 0.02 (lambda () (setq counter (1+ counter))))",
+    );
+    let start = Instant::now();
+    handle.run_for(&mut ctx, Duration::from_millis(150)).await;
+    let elapsed = start.elapsed();
+    let fired = eval_i64(&mut ctx, "counter");
+    // 0.02 .. 0.14 in 0.02 steps → expect ~7 firings, allow slop.
+    assert!((4..=8).contains(&fired), "counter = {fired}");
+    // Must respect the window — within ~50ms of the requested 150.
+    assert!(
+        elapsed >= Duration::from_millis(145) && elapsed < Duration::from_millis(300),
+        "elapsed = {elapsed:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn run_until_idle_returns_on_empty_mailbox() {
     let mut ctx = TulispContext::new();
     let handle = tulisp_async::register(&mut ctx, Arc::new(TokioExecutor::new()));

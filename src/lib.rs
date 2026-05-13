@@ -143,7 +143,18 @@ impl Handle {
     /// signal to stop earlier.
     #[cfg(feature = "tokio")]
     pub async fn run_until_idle(&self, ctx: &mut TulispContext) {
-        crate::tokio::run_until_idle(ctx, &self.mailbox).await
+        crate::tokio::run_until(ctx, &self.mailbox, None).await
+    }
+
+    /// Drive the timer queue asynchronously for `dur`, then return.
+    /// Fires every body whose deadline falls inside the window, in
+    /// deadline order. Repeating timers re-push themselves; firings
+    /// scheduled beyond the window stay in the mailbox for a future
+    /// `tick` / `run_until_idle` / `run_for`.
+    #[cfg(feature = "tokio")]
+    pub async fn run_for(&self, ctx: &mut TulispContext, dur: Duration) {
+        let wake = std::time::Instant::now() + dur;
+        crate::tokio::run_until(ctx, &self.mailbox, Some(wake)).await
     }
 }
 
