@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use tulisp::{TulispContext, TulispObject};
 
-use crate::{Executor, TimerHandle};
+use crate::{Clock, Executor, TimerHandle};
 
 /// A timer firing that hasn't happened yet. `deadline` is the absolute
 /// `Instant` the body should be funcalled at. For one-shot timers
@@ -73,6 +73,7 @@ pub(crate) fn drain_until(
     ctx: &mut TulispContext,
     mailbox: &Mailbox,
     executor: &dyn Executor,
+    clock: &dyn Clock,
     wake: Instant,
 ) {
     loop {
@@ -90,21 +91,24 @@ pub(crate) fn drain_until(
             }
         };
 
-        // No more due-before-wake firings. Sleep out any remaining
-        // window (so `(sleep-for 1)` still parks for ~1s when no
-        // timers fire) and return. `tick`'s `wake == now` case
-        // skips this sleep because the saturating subtraction is 0.
+        // No more due-before-wake firings. Reach `wake` and return: a
+        // wall clock parks for the remaining window (so `(sleep-for 1)`
+        // still waits ~1s when no timers fire); a virtual clock jumps to
+        // `wake` for free. `tick`'s `wake == now` case yields a zero
+        // residual either way, so it never sleeps.
         let Some(task) = popped else {
-            let now = Instant::now();
-            if now < wake {
-                executor.sleep_blocking(wake - now);
+            let wait = clock.advance_to(wake);
+            if !wait.is_zero() {
+                executor.sleep_blocking(wait);
             }
             return;
         };
 
-        let now = Instant::now();
-        if task.deadline > now {
-            executor.sleep_blocking(task.deadline - now);
+        // Reach this firing's deadline before running it: a wall clock
+        // really sleeps the gap, a virtual clock jumps forward for free.
+        let wait = clock.advance_to(task.deadline);
+        if !wait.is_zero() {
+            executor.sleep_blocking(wait);
         }
         if task.cancel.is_cancelled() {
             continue;

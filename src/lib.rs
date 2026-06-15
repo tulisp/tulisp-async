@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tulisp::{Error, Rest, Shared, TulispContext, TulispConvertible, TulispObject, TulispValue};
 
@@ -46,6 +46,120 @@ pub trait Executor: Send + Sync + 'static {
     /// is free to use `std::thread::sleep`, a runtime-driven timer, or
     /// any other mechanism that blocks the calling thread.
     fn sleep_blocking(&self, dur: Duration);
+}
+
+// -- clock --------------------------------------------------------------
+
+/// Source of "now" for the timer queue, and the policy for *reaching* a
+/// deadline. The default ([`WallClock`]) reads `Instant::now()`, so timers
+/// fire on real time. A host that drives a simulation can instead supply a
+/// hand-advanced clock (see [`ManualClock`]) via [`register_with_clock`]
+/// and fire timers on *simulated* time — fast-forwarding or stepping
+/// deterministically rather than waiting on the wall clock. The clock owns
+/// the wait, so *every* driver (the lisp-visible `(sleep-for …)`, the Rust
+/// [`Handle::tick`], and the async [`Handle::run_until_idle`] /
+/// [`Handle::run_for`]) honors it; a virtual clock never sleeps on real
+/// time on any of those paths.
+///
+/// Deadlines are still `Instant`s; a virtual clock expresses sim-time
+/// as an offset from a base `Instant` captured at construction, so the
+/// existing deadline arithmetic and ordering are unchanged.
+pub trait Clock: Send + Sync + 'static {
+    /// Current instant on this clock's timeline.
+    fn now(&self) -> Instant;
+
+    /// Reach `deadline`, returning how much *real* time the caller must
+    /// still block to get there. A real-time clock can't be moved, so it
+    /// returns `deadline - now()` and the caller really waits (which is
+    /// what advances a wall clock); a virtual clock jumps its own `now()`
+    /// forward to `deadline` and returns [`Duration::ZERO`], so a
+    /// simulation arrives at the deadline with no real-time sleeping. The
+    /// drain loops call this before firing each due body and then block —
+    /// sync via the [`Executor`], async via the runtime timer — only for
+    /// the returned residual. The default is correct for any clock whose
+    /// `now()` tracks elapsed real time 1:1, since really sleeping the
+    /// residual is what advances it. A *virtual* clock — whose `now()`
+    /// only moves on command — **must** override this to jump its own
+    /// time forward and return [`Duration::ZERO`]; inheriting the default
+    /// would make it really sleep, or hang on a deadline its `now()`
+    /// never reaches.
+    fn advance_to(&self, deadline: Instant) -> Duration {
+        deadline.saturating_duration_since(self.now())
+    }
+}
+
+/// Wall-clock: `now()` is `Instant::now()`, and reaching a deadline is a
+/// real sleep (the default [`Clock::advance_to`]). The default for
+/// [`register`].
+pub struct WallClock;
+
+impl Clock for WallClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
+/// A hand-advanced clock for driving timers on simulated time. `now()`
+/// is a fixed base `Instant` plus an elapsed offset. It moves forward
+/// when the host calls [`advance`](Self::advance) — step the queue
+/// deterministically by advancing and calling [`Handle::tick`](Handle::tick)
+/// — and also when a drain has to *wait* past the current sim-time
+/// (`(sleep-for …)` or [`Handle::run_for`] / [`Handle::run_until_idle`]):
+/// rather than sleep on real time, the clock jumps straight to the
+/// deadline. Elapsed time is monotonic — it never runs backward.
+pub struct ManualClock {
+    base: Instant,
+    elapsed_nanos: AtomicU64,
+}
+
+impl ManualClock {
+    pub fn new() -> Self {
+        Self {
+            base: Instant::now(),
+            elapsed_nanos: AtomicU64::new(0),
+        }
+    }
+
+    /// Move simulated time forward by `dur`. Saturates at `u64::MAX`
+    /// nanoseconds (~584 years) — both a single oversized `dur` and the
+    /// running total clamp rather than wrapping, so elapsed time stays
+    /// monotonic.
+    pub fn advance(&self, dur: Duration) {
+        let nanos = u64::try_from(dur.as_nanos()).unwrap_or(u64::MAX);
+        self.elapsed_nanos
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |e| {
+                Some(e.saturating_add(nanos))
+            })
+            .ok();
+    }
+
+    /// Simulated time elapsed since construction.
+    pub fn elapsed(&self) -> Duration {
+        Duration::from_nanos(self.elapsed_nanos.load(Ordering::Relaxed))
+    }
+}
+
+impl Default for ManualClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clock for ManualClock {
+    fn now(&self) -> Instant {
+        self.base + self.elapsed()
+    }
+
+    /// Jump simulated time forward to `deadline` (never backward) and
+    /// return [`Duration::ZERO`] — reaching a deadline on a virtual clock
+    /// costs no real time.
+    fn advance_to(&self, deadline: Instant) -> Duration {
+        if let Some(target) = deadline.checked_duration_since(self.base) {
+            let nanos = u64::try_from(target.as_nanos()).unwrap_or(u64::MAX);
+            self.elapsed_nanos.fetch_max(nanos, Ordering::Relaxed);
+        }
+        Duration::ZERO
+    }
 }
 
 // -- timer handle -------------------------------------------------------
@@ -96,12 +210,10 @@ impl fmt::Display for TimerHandle {
 impl TulispConvertible for TimerHandle {
     fn from_tulisp(value: &TulispObject) -> Result<Self, Error> {
         let any = value.as_any().map_err(|e| e.with_trace(value.clone()))?;
-        any.downcast_ref::<TimerHandle>()
-            .cloned()
-            .ok_or_else(|| {
-                Error::type_mismatch(format!("Expected a timer handle, got: {value}"))
-                    .with_trace(value.clone())
-            })
+        any.downcast_ref::<TimerHandle>().cloned().ok_or_else(|| {
+            Error::type_mismatch(format!("Expected a timer handle, got: {value}"))
+                .with_trace(value.clone())
+        })
     }
 
     fn into_tulisp(self) -> TulispObject {
@@ -130,6 +242,7 @@ fn is_timer_handle(v: &TulispObject) -> bool {
 pub struct Handle {
     mailbox: pending::Mailbox,
     executor: Arc<dyn Executor>,
+    clock: Arc<dyn Clock>,
 }
 
 impl Handle {
@@ -140,11 +253,13 @@ impl Handle {
     /// that next firing — call again after time has elapsed, or use
     /// `(sleep-for …)` from lisp, which drains while it waits.
     pub fn tick(&self, ctx: &mut TulispContext) {
-        pending::drain_until(ctx, &self.mailbox, &*self.executor, std::time::Instant::now());
+        let now = self.clock.now();
+        pending::drain_until(ctx, &self.mailbox, &*self.executor, &*self.clock, now);
     }
 
-    /// Drive the timer queue asynchronously, awaiting each task's
-    /// deadline via `tokio::time::sleep`, until the mailbox has no
+    /// Drive the timer queue asynchronously on the Handle's clock,
+    /// reaching each task's deadline via `tokio::time::sleep` (or, on a
+    /// virtual clock, jumping to it for free), until the mailbox has no
     /// live entries left. Repeating timers re-push themselves, so
     /// this future does not return until every timer has been
     /// cancelled (typically from inside a body via `cancel-timer`).
@@ -152,18 +267,20 @@ impl Handle {
     /// signal to stop earlier.
     #[cfg(feature = "tokio")]
     pub async fn run_until_idle(&self, ctx: &mut TulispContext) {
-        crate::tokio::run_until(ctx, &self.mailbox, None).await
+        crate::tokio::run_until(ctx, &self.mailbox, &*self.clock, None).await
     }
 
-    /// Drive the timer queue asynchronously for `dur`, then return.
-    /// Fires every body whose deadline falls inside the window, in
-    /// deadline order. Repeating timers re-push themselves; firings
-    /// scheduled beyond the window stay in the mailbox for a future
-    /// `tick` / `run_until_idle` / `run_for`.
+    /// Drive the timer queue asynchronously for `dur` of the Handle's
+    /// clock, then return. Fires every body whose deadline falls inside
+    /// the window, in deadline order. On a virtual clock the window is
+    /// `dur` of sim-time and is fast-forwarded with no real waiting.
+    /// Repeating timers re-push themselves; firings scheduled beyond the
+    /// window stay in the mailbox for a future `tick` / `run_until_idle`
+    /// / `run_for`.
     #[cfg(feature = "tokio")]
     pub async fn run_for(&self, ctx: &mut TulispContext, dur: Duration) {
-        let wake = std::time::Instant::now() + dur;
-        crate::tokio::run_until(ctx, &self.mailbox, Some(wake)).await
+        let wake = self.clock.now() + dur;
+        crate::tokio::run_until(ctx, &self.mailbox, &*self.clock, Some(wake)).await
     }
 }
 
@@ -187,24 +304,42 @@ impl Handle {
 /// don't keep it around, they're effectively leaked until the `Arc`
 /// chain unwinds at process exit.
 pub fn register(ctx: &mut TulispContext, executor: Arc<dyn Executor>) -> Handle {
+    register_with_clock(ctx, executor, Arc::new(WallClock))
+}
+
+/// Like [`register`], but timers fire on `clock` instead of the wall
+/// clock. Pass a [`ManualClock`] to drive the queue on simulated time:
+/// advance the clock by hand and call [`Handle::tick`] to fire whatever
+/// is due (a deadline at or before the advanced `now` fires
+/// immediately), or let `(sleep-for …)` / [`Handle::run_for`] /
+/// [`Handle::run_until_idle`] fast-forward sim-time to the next deadline
+/// — every path reaches deadlines through the clock, so none sleeps on
+/// real time.
+pub fn register_with_clock(
+    ctx: &mut TulispContext,
+    executor: Arc<dyn Executor>,
+    clock: Arc<dyn Clock>,
+) -> Handle {
     let mailbox = pending::new_mailbox();
 
     ctx.defun("timerp", |v: TulispObject| is_timer_handle(&v));
 
     let exec_sleep = executor.clone();
     let mb_sleep = mailbox.clone();
+    let clk_sleep = clock.clone();
     ctx.defun("sleep-for", move |ctx: &mut TulispContext, secs: f64| {
         if !secs.is_finite() || secs < 0.0 {
             return Err(Error::out_of_range(format!(
                 "sleep-for: invalid duration: {secs}"
             )));
         }
-        let wake = std::time::Instant::now() + Duration::from_secs_f64(secs);
-        pending::drain_until(ctx, &mb_sleep, &*exec_sleep, wake);
+        let wake = clk_sleep.now() + Duration::from_secs_f64(secs);
+        pending::drain_until(ctx, &mb_sleep, &*exec_sleep, &*clk_sleep, wake);
         Ok::<_, Error>(TulispObject::nil())
     });
 
     let mb_timer = mailbox.clone();
+    let clk_timer = clock.clone();
     ctx.defun(
         "run-with-timer",
         move |secs: f64, repeat: NilOr<f64>, f: TulispObject, args: Rest<TulispObject>| {
@@ -220,7 +355,7 @@ pub fn register(ctx: &mut TulispContext, executor: Arc<dyn Executor>) -> Handle 
             };
             let handle = TimerHandle::new();
             mb_timer.lock().unwrap().push(pending::PendingTask {
-                deadline: std::time::Instant::now() + Duration::from_secs_f64(secs),
+                deadline: clk_timer.now() + Duration::from_secs_f64(secs),
                 repeat,
                 body: f,
                 args: args.into(),
@@ -235,5 +370,9 @@ pub fn register(ctx: &mut TulispContext, executor: Arc<dyn Executor>) -> Handle 
         Ok::<_, Error>(TulispObject::nil())
     });
 
-    Handle { mailbox, executor }
+    Handle {
+        mailbox,
+        executor,
+        clock,
+    }
 }

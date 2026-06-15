@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use tulisp::TulispContext;
 
-use crate::Executor;
 use crate::pending::{self, Mailbox, PendingTask};
+use crate::{Clock, Executor};
 
 /// Drives sleeps and timers on a tokio runtime. Construct inside a tokio
 /// runtime — it captures `Handle::current()` so it can schedule work
@@ -42,16 +42,18 @@ impl Executor for TokioExecutor {
     }
 }
 
-/// Async counterpart to `pending::drain_until`. Awaits each task's
-/// deadline via `tokio::time::sleep` instead of parking the calling
-/// thread, fires the body on `ctx`, and returns when the mailbox has
-/// no live entries left (`wake = None`) or when `wake` is reached
-/// (`wake = Some(t)`). Repeating timers re-push themselves, so a
-/// caller that picks `None` must arrange for every timer to cancel
-/// itself eventually.
+/// Async counterpart to `pending::drain_until`. Reaches each task's
+/// deadline via `clock.advance_to` — awaiting `tokio::time::sleep` for the
+/// residual real time instead of parking the calling thread — fires the
+/// body on `ctx`, and returns when the mailbox has no live entries left
+/// (`wake = None`) or when `wake` is reached (`wake = Some(t)`). Under a
+/// virtual clock the residual is zero, so this fast-forwards sim-time with
+/// no real waiting. Repeating timers re-push themselves, so a caller that
+/// picks `None` must arrange for every timer to cancel itself eventually.
 pub(crate) async fn run_until(
     ctx: &mut TulispContext,
     mailbox: &Mailbox,
+    clock: &dyn Clock,
     wake: Option<Instant>,
 ) {
     loop {
@@ -66,17 +68,17 @@ pub(crate) async fn run_until(
 
         let Some(task) = popped else {
             if let Some(w) = wake {
-                let now = Instant::now();
-                if now < w {
-                    tokio::time::sleep(w - now).await;
+                let wait = clock.advance_to(w);
+                if !wait.is_zero() {
+                    tokio::time::sleep(wait).await;
                 }
             }
             return;
         };
 
-        let now = Instant::now();
-        if task.deadline > now {
-            tokio::time::sleep(task.deadline - now).await;
+        let wait = clock.advance_to(task.deadline);
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
         }
         if task.cancel.is_cancelled() {
             continue;

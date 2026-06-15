@@ -55,8 +55,14 @@ async fn sleep_for_blocks_for_duration() {
     let start = Instant::now();
     eval_ok(&mut ctx, "(sleep-for 0.1)");
     let elapsed = start.elapsed();
-    assert!(elapsed >= Duration::from_millis(95), "elapsed = {elapsed:?}");
-    assert!(elapsed < Duration::from_millis(500), "elapsed = {elapsed:?}");
+    assert!(
+        elapsed >= Duration::from_millis(95),
+        "elapsed = {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "elapsed = {elapsed:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -323,7 +329,10 @@ async fn timer_handles_display_distinct_ids() {
     let b = eval_ok(&mut ctx, "(run-with-timer 10 nil (lambda () nil))");
     let sa = format!("{a}");
     let sb = format!("{b}");
-    assert!(sa.starts_with("#<timer-handle ") && sa.ends_with('>'), "sa = {sa}");
+    assert!(
+        sa.starts_with("#<timer-handle ") && sa.ends_with('>'),
+        "sa = {sa}"
+    );
     assert_ne!(sa, sb, "expected distinct ids: {sa} vs {sb}");
 }
 
@@ -370,7 +379,10 @@ async fn run_until_idle_drains_self_cancelling_timer() {
     let elapsed = start.elapsed();
     assert_eq!(eval_i64(&mut ctx, "counter"), 3);
     // Each fire awaits ~20ms; three fires + bookkeeping ≈ 60ms.
-    assert!(elapsed < Duration::from_millis(500), "elapsed = {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "elapsed = {elapsed:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -444,5 +456,132 @@ async fn nil_or_rejects_wrong_type() {
     assert!(
         err.to_lowercase().contains("int") || err.to_lowercase().contains("number"),
         "err = {err}"
+    );
+}
+
+// -- manual (sim-time) clock --------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_clock_fires_one_shot_on_advanced_time() {
+    use tulisp_async::ManualClock;
+    let mut ctx = TulispContext::new();
+    let clock = Arc::new(ManualClock::new());
+    let handle =
+        tulisp_async::register_with_clock(&mut ctx, Arc::new(TokioExecutor::new()), clock.clone());
+    eval_ok(&mut ctx, "(setq counter 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 5.0 nil (lambda () (setq counter (1+ counter))))",
+    );
+    let start = Instant::now();
+    // Clock still at 0 — nothing due.
+    handle.tick(&mut ctx);
+    assert_eq!(eval_i64(&mut ctx, "counter"), 0);
+    // Advance past the deadline; the timer fires with no real sleeping.
+    clock.advance(Duration::from_secs(5));
+    handle.tick(&mut ctx);
+    assert_eq!(eval_i64(&mut ctx, "counter"), 1);
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "sim-time tick must not wall-sleep, elapsed = {:?}",
+        start.elapsed()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_clock_repeats_per_advanced_interval() {
+    use tulisp_async::ManualClock;
+    let mut ctx = TulispContext::new();
+    let clock = Arc::new(ManualClock::new());
+    let handle =
+        tulisp_async::register_with_clock(&mut ctx, Arc::new(TokioExecutor::new()), clock.clone());
+    eval_ok(&mut ctx, "(setq counter 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 5.0 5.0 (lambda () (setq counter (1+ counter))))",
+    );
+    // Jump 15 s and drain once: the 5 s repeater is due at 5/10/15.
+    clock.advance(Duration::from_secs(15));
+    handle.tick(&mut ctx);
+    assert_eq!(eval_i64(&mut ctx, "counter"), 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_clock_sleep_for_fast_forwards_without_real_sleep() {
+    use tulisp_async::ManualClock;
+    let mut ctx = TulispContext::new();
+    let clock = Arc::new(ManualClock::new());
+    // Driven entirely from lisp via `(sleep-for …)`, so the Handle is
+    // unused — the defuns hold their own clones of the mailbox and clock.
+    let _handle =
+        tulisp_async::register_with_clock(&mut ctx, Arc::new(TokioExecutor::new()), clock.clone());
+    eval_ok(&mut ctx, "(setq counter 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 5.0 nil (lambda () (setq counter (1+ counter))))",
+    );
+    let start = Instant::now();
+    // `(sleep-for 10)` jumps sim-time past the 5 s deadline — the timer
+    // fires and the call returns at once, with no real 10 s wait.
+    eval_ok(&mut ctx, "(sleep-for 10.0)");
+    assert_eq!(eval_i64(&mut ctx, "counter"), 1);
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "sleep-for on a manual clock must not wall-sleep, elapsed = {:?}",
+        start.elapsed()
+    );
+    // Sim-time really advanced to the full sleep window.
+    assert!(
+        clock.elapsed() >= Duration::from_secs(10),
+        "elapsed sim time"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_clock_run_until_idle_fast_forwards_without_real_sleep() {
+    use tulisp_async::ManualClock;
+    let mut ctx = TulispContext::new();
+    let clock = Arc::new(ManualClock::new());
+    let handle =
+        tulisp_async::register_with_clock(&mut ctx, Arc::new(TokioExecutor::new()), clock.clone());
+    eval_ok(&mut ctx, "(setq counter 0)");
+    // 5 s repeater that cancels itself after three fires (at sim 5/10/15).
+    eval_ok(
+        &mut ctx,
+        "(setq h (run-with-timer 5.0 5.0 (lambda () (setq counter (1+ counter)) (when (>= counter 3) (cancel-timer h)))))",
+    );
+    let start = Instant::now();
+    handle.run_until_idle(&mut ctx).await;
+    assert_eq!(eval_i64(&mut ctx, "counter"), 3);
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "async fast-forward must not wall-sleep, elapsed = {:?}",
+        start.elapsed()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_clock_run_for_uses_sim_window() {
+    use tulisp_async::ManualClock;
+    let mut ctx = TulispContext::new();
+    let clock = Arc::new(ManualClock::new());
+    let handle =
+        tulisp_async::register_with_clock(&mut ctx, Arc::new(TokioExecutor::new()), clock.clone());
+    eval_ok(&mut ctx, "(setq counter 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 5.0 5.0 (lambda () (setq counter (1+ counter))))",
+    );
+    let start = Instant::now();
+    // 12 sim-seconds covers the firings at 5 and 10, not the one at 15.
+    handle.run_for(&mut ctx, Duration::from_secs(12)).await;
+    assert_eq!(eval_i64(&mut ctx, "counter"), 2);
+    // A further 5 sim-seconds (window now reaches 17) fires the one at 15.
+    handle.run_for(&mut ctx, Duration::from_secs(5)).await;
+    assert_eq!(eval_i64(&mut ctx, "counter"), 3);
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "run_for on a manual clock must not wall-sleep, elapsed = {:?}",
+        start.elapsed()
     );
 }
