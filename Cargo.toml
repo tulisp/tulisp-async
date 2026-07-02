@@ -3,8 +3,11 @@ name = "tulisp-async"
 version = "0.1.0"
 edition = "2024"
 description = "Runtime-agnostic async primitives for tulisp."
-license = "GPL-3.0"
+repository = "https://github.com/tulisp/tulisp-async"
+license = "GPL-3.0-only"
 rust-version = "1.88.0"
+keywords = ["lisp", "emacs-lisp", "async", "tulisp"]
+categories = ["asynchronous"]
 
 [dependencies]
 tulisp = { version = "0.29.0", features = ["sync"] }
