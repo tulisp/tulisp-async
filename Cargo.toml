@@ -1,6 +1,6 @@
 [package]
 name = "tulisp-async"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Runtime-agnostic async primitives for tulisp."
 repository = "https://github.com/tulisp/tulisp-async"
