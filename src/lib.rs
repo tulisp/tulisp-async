@@ -1,11 +1,12 @@
 #![doc = include_str!("../README.md")]
 
+use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use tulisp::{Error, Rest, Shared, TulispContext, TulispConvertible, TulispObject, TulispValue};
+use tulisp::{Error, Rest, TulispAny, TulispContext, TulispObject};
 
 mod pending;
 
@@ -13,29 +14,6 @@ mod pending;
 mod tokio;
 #[cfg(feature = "tokio")]
 pub use self::tokio::TokioExecutor;
-
-/// Accepts either lisp `nil` or a typed `T`. Use this in defun
-/// signatures where a non-trailing parameter can be nil — tulisp's
-/// defun macro reserves `Option<T>` for trailing `&optional` args, so
-/// "nil or value" in any other position needs this wrapper.
-pub struct NilOr<T>(pub Option<T>);
-
-impl<T: TulispConvertible> TulispConvertible for NilOr<T> {
-    fn from_tulisp(value: &TulispObject) -> Result<Self, Error> {
-        if value.null() {
-            Ok(NilOr(None))
-        } else {
-            Ok(NilOr(Some(T::from_tulisp(value)?)))
-        }
-    }
-
-    fn into_tulisp(self) -> TulispObject {
-        match self.0 {
-            None => TulispObject::nil(),
-            Some(v) => v.into_tulisp(),
-        }
-    }
-}
 
 /// Host-provided async driver. `tulisp-async` ships `TokioExecutor` behind
 /// the `tokio` feature; other runtimes can implement this trait to reuse
@@ -207,28 +185,13 @@ impl fmt::Display for TimerHandle {
     }
 }
 
-impl TulispConvertible for TimerHandle {
-    fn from_tulisp(value: &TulispObject) -> Result<Self, Error> {
-        let any = value.as_any().map_err(|e| e.with_trace(value.clone()))?;
-        any.downcast_ref::<TimerHandle>().cloned().ok_or_else(|| {
-            Error::type_mismatch(format!("Expected a timer handle, got: {value}"))
-                .with_trace(value.clone())
-        })
-    }
-
-    fn into_tulisp(self) -> TulispObject {
-        TulispValue::from(Shared::new(self)).into_ref(None)
+impl TulispAny for TimerHandle {
+    fn lisp_type_name() -> Cow<'static, str> {
+        Cow::Borrowed("timer-handle")
     }
 }
 
 // -- registration -------------------------------------------------------
-
-fn is_timer_handle(v: &TulispObject) -> bool {
-    v.as_any()
-        .ok()
-        .map(|any| any.downcast_ref::<TimerHandle>().is_some())
-        .unwrap_or(false)
-}
 
 /// Handle returned by [`register`] that lets non-lisp callers drive
 /// the timer queue from Rust. The same mailbox the lisp builtins use
@@ -322,7 +285,9 @@ pub fn register_with_clock(
 ) -> Handle {
     let mailbox = pending::new_mailbox();
 
-    ctx.defun("timerp", |v: TulispObject| is_timer_handle(&v));
+    ctx.defun("timerp", |v: TulispObject| {
+        v.downcast::<TimerHandle>().is_some()
+    });
 
     let exec_sleep = executor.clone();
     let mb_sleep = mailbox.clone();
@@ -335,24 +300,22 @@ pub fn register_with_clock(
         }
         let wake = clk_sleep.now() + Duration::from_secs_f64(secs);
         pending::drain_until(ctx, &mb_sleep, &*exec_sleep, &*clk_sleep, wake);
-        Ok::<_, Error>(TulispObject::nil())
+        Ok(())
     });
 
     let mb_timer = mailbox.clone();
     let clk_timer = clock.clone();
     ctx.defun(
         "run-with-timer",
-        move |secs: f64, repeat: NilOr<f64>, f: TulispObject, args: Rest<TulispObject>| {
+        move |secs: f64, repeat: Option<f64>, f: TulispObject, args: Rest<TulispObject>| {
             if !secs.is_finite() || secs < 0.0 {
                 return Err(Error::out_of_range(format!(
                     "run-with-timer: invalid secs: {secs}"
                 )));
             }
-            let repeat = match repeat.0 {
-                None => None,
-                Some(r) if !r.is_finite() || r <= 0.0 => None,
-                Some(r) => Some(Duration::from_secs_f64(r)),
-            };
+            let repeat = repeat
+                .filter(|r| r.is_finite() && *r > 0.0)
+                .map(Duration::from_secs_f64);
             let handle = TimerHandle::new();
             mb_timer.lock().unwrap().push(pending::PendingTask {
                 deadline: clk_timer.now() + Duration::from_secs_f64(secs),
@@ -365,10 +328,7 @@ pub fn register_with_clock(
         },
     );
 
-    ctx.defun("cancel-timer", |h: TimerHandle| {
-        h.cancel();
-        Ok::<_, Error>(TulispObject::nil())
-    });
+    ctx.defun("cancel-timer", |h: TimerHandle| h.cancel());
 
     Handle {
         mailbox,

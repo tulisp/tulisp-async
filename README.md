@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (run-with-timer 0.5 nil (lambda () (setq fired (1+ fired))))
         (sleep-for 0.7)
         fired
-    "#).map_err(|e| format!("{}", e.format(&ctx)))?;
+    "#).map_err(|e| format!("{e}"))?;
     println!("fired = {result}");  // 1
     Ok(())
 }
@@ -51,7 +51,7 @@ cargo run --example sleep
 | `(run-with-timer SECS REPEAT FN &rest ARGS)` | Fire `(FN ARGS…)` after `SECS`; if `REPEAT` is a positive number, re-fire every `REPEAT` seconds. `nil`, `0`, or any non-positive `REPEAT` means one-shot. Returns a timer handle. |
 | `(cancel-timer H)` | Stop further firings of timer `H`. Returns `nil`. |
 
-Timer bodies funcall on the calling `TulispContext` — the same one
+Timer bodies run on the calling `TulispContext` — the same one
 the parent program runs on, so defuns, defvars, load state, and
 error-trace filenames all carry through. `(sleep-for …)` drains
 pending firings in deadline order while it waits, matching Emacs's
@@ -93,7 +93,7 @@ behind a feature here, mirroring `src/tokio.rs`).
 ## Design notes
 
 - **Same-context firings.** `run-with-timer` pushes a pending firing
-  onto a per-`register` mailbox; the drain helpers funcall the body on
+  onto a per-`register` mailbox; the drain helpers call the body on
   the calling `&mut ctx`. No fork, no `Arc<Mutex<TulispContext>>`.
 - **Drained from `(sleep-for …)` or `Handle::tick`.** A program that
   registers a timer and immediately returns to Rust without ticking

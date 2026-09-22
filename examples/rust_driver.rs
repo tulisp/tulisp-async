@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
-use tulisp::{Error, TulispContext, TulispObject};
+use tulisp::TulispContext;
 use tulisp_async::TokioExecutor;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -30,9 +30,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Bridge: (send-msg S) pushes onto the channel. UnboundedSender
     // is Send + Sync + Clone — Mutex-free on the defun side.
-    ctx.defun("send-msg", move |s: String| -> Result<TulispObject, Error> {
+    ctx.defun("send-msg", move |s: String| {
         let _ = tx.send(s);
-        Ok(TulispObject::nil())
     });
 
     ctx.eval_string(
@@ -45,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (when (>= tick 4) (cancel-timer h)))))
 "#,
     )
-    .map_err(|e| format!("lisp error:\n{}", e.format(&ctx)))?;
+    .map_err(|e| format!("lisp error:\n{e}"))?;
 
     // One await drives the queue. Returns when the timer body cancels
     // itself and the mailbox empties.

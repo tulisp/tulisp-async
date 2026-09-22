@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 (princ (format "final counter: %d\n" counter))
 "#,
     )
-    .map_err(|e| format!("lisp error:\n{}", e.format(&ctx)))?;
+    .map_err(|e| format!("lisp error:\n{e}"))?;
 
     Ok(())
 }

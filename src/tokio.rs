@@ -83,8 +83,8 @@ pub(crate) async fn run_until(
         if task.cancel.is_cancelled() {
             continue;
         }
-        if let Err(e) = ctx.funcall(&task.body, &task.args) {
-            eprintln!("run-with-timer: {}", e.format(ctx));
+        if let Err(e) = ctx.apply(&task.body, &task.args) {
+            eprintln!("run-with-timer: {e}");
         }
         if task.cancel.is_cancelled() {
             continue;

@@ -17,7 +17,7 @@ use tulisp::{TulispContext, TulispObject};
 use crate::{Clock, Executor, TimerHandle};
 
 /// A timer firing that hasn't happened yet. `deadline` is the absolute
-/// `Instant` the body should be funcalled at. For one-shot timers
+/// `Instant` the body should be called at. For one-shot timers
 /// `repeat` is `None`; for repeating timers it's the interval, and the
 /// driver re-pushes the task with `deadline + repeat` after each firing.
 /// `args` is the list of `&rest` arguments to pass to the body — `nil`
@@ -81,7 +81,7 @@ pub(crate) fn drain_until(
         // next firing whose deadline falls before `wake`. The body
         // itself can re-enter the mailbox (e.g., by calling
         // `run-with-timer` or a nested `sleep-for`), so we never hold
-        // the lock across `funcall` or `sleep_blocking`.
+        // the lock across `apply` or `sleep_blocking`.
         let popped = {
             let mut tasks = mailbox.lock().unwrap();
             tasks.retain(|t| !t.cancel.is_cancelled());
@@ -113,10 +113,10 @@ pub(crate) fn drain_until(
         if task.cancel.is_cancelled() {
             continue;
         }
-        if let Err(e) = ctx.funcall(&task.body, &task.args) {
-            eprintln!("run-with-timer: {}", e.format(ctx));
+        if let Err(e) = ctx.apply(&task.body, &task.args) {
+            eprintln!("run-with-timer: {e}");
         }
-        // Re-check after funcall: the body can cancel its own handle.
+        // Re-check after the call: the body can cancel its own handle.
         if task.cancel.is_cancelled() {
             continue;
         }

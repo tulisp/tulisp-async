@@ -14,8 +14,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use tulisp::{Error, TulispContext, TulispObject};
-use tulisp_async::{Handle, NilOr, TokioExecutor};
+use tulisp::{TulispContext, TulispObject};
+use tulisp_async::{Handle, TokioExecutor};
 
 // Compile-time guarantee: Handle is freely movable/shareable across
 // tokio tasks. Catches a future regression where someone adds a
@@ -34,7 +34,7 @@ fn setup() -> TulispContext {
 }
 
 fn eval(ctx: &mut TulispContext, src: &str) -> Result<TulispObject, String> {
-    ctx.eval_string(src).map_err(|e| e.format(ctx))
+    ctx.eval_string(src).map_err(|e| e.to_string())
 }
 
 fn eval_ok(ctx: &mut TulispContext, src: &str) -> TulispObject {
@@ -80,6 +80,13 @@ async fn sleep_for_negative_errors() {
 }
 
 // -- run-with-timer / cancel-timer --------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_timer_rejects_a_non_handle() {
+    let mut ctx = setup();
+    let err = eval(&mut ctx, "(cancel-timer 42)").unwrap_err();
+    assert!(err.contains("Expected timer-handle"), "err = {err}");
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn timer_one_shot_fires_once() {
@@ -176,7 +183,6 @@ async fn timer_many_one_shot() {
     let c = counter.clone();
     ctx.defun("bump", move || {
         c.fetch_add(1, Ordering::SeqCst);
-        Ok::<_, Error>(TulispObject::nil())
     });
     eval_ok(
         &mut ctx,
@@ -203,7 +209,7 @@ async fn run_with_timer_passes_rest_args() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn run_with_timer_no_args_calls_body_with_nil() {
-    // Pre-existing behavior: no &rest args → body funcalled with no
+    // Pre-existing behavior: no &rest args → body called with no
     // arguments. Sanity check that adding the args field didn't
     // regress the zero-args path.
     let mut ctx = setup();
@@ -429,34 +435,6 @@ async fn tick_leaves_future_timers_pending() {
     handle.tick(&mut ctx);
     // Timer is 10s out — tick must return immediately without firing.
     assert_eq!(eval_i64(&mut ctx, "counter"), 0);
-}
-
-// -- NilOr<T> -----------------------------------------------------------
-
-#[tokio::test(flavor = "multi_thread")]
-async fn nil_or_accepts_nil_and_value() {
-    let mut ctx = setup();
-    // Register a Rust fn that mirrors its NilOr<i64> arg back to a
-    // convention: -1 for nil, n for Some(n).
-    ctx.defun("nil-or-i64-probe", |v: NilOr<i64>| {
-        Ok::<_, Error>(v.0.unwrap_or(-1))
-    });
-    assert_eq!(eval_i64(&mut ctx, "(nil-or-i64-probe nil)"), -1);
-    assert_eq!(eval_i64(&mut ctx, "(nil-or-i64-probe 7)"), 7);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn nil_or_rejects_wrong_type() {
-    let mut ctx = setup();
-    ctx.defun("nil-or-i64-probe", |v: NilOr<i64>| {
-        Ok::<_, Error>(v.0.unwrap_or(-1))
-    });
-    let err = eval(&mut ctx, r#"(nil-or-i64-probe "hello")"#).unwrap_err();
-    // tulisp's i64 conversion error mentions the expected type.
-    assert!(
-        err.to_lowercase().contains("int") || err.to_lowercase().contains("number"),
-        "err = {err}"
-    );
 }
 
 // -- manual (sim-time) clock --------------------------------------------

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
-use tulisp::{Error, TulispContext, TulispConvertible, TulispObject};
+use tulisp::TulispContext;
 use tulisp_async::TokioExecutor;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -33,11 +33,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // serialize through a Mutex to satisfy the defun closure's
     // Send + Sync bounds under tulisp's `sync` feature.
     let rx = Mutex::new(rx);
-    ctx.defun("try-recv", move || -> Result<TulispObject, Error> {
-        match rx.lock().unwrap().try_recv() {
-            Ok(msg) => Ok(msg.into_tulisp()),
-            Err(_) => Ok(TulispObject::nil()),
-        }
+    ctx.defun("try-recv", move || -> Option<String> {
+        rx.lock().unwrap().try_recv().ok()
     });
 
     ctx.eval_string(
@@ -57,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (reverse received)))
 "#,
     )
-    .map_err(|e| format!("lisp error:\n{}", e.format(&ctx)))?;
+    .map_err(|e| format!("lisp error:\n{e}"))?;
 
     Ok(())
 }

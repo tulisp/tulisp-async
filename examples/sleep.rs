@@ -2,7 +2,7 @@
 //!
 //! Schedules two one-shot timers and lets them fire while the main
 //! thread sleeps inside `(sleep-for …)`. The drain loop wakes up at
-//! each deadline, funcalls the body on the calling ctx, and goes back
+//! each deadline, calls the body on the calling ctx, and goes back
 //! to sleep — single-threaded firing in deadline order.
 
 use std::sync::Arc;
@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 (princ (format "fired: %S\n" fired))
 "#,
     )
-    .map_err(|e| format!("lisp error:\n{}", e.format(&ctx)))?;
+    .map_err(|e| format!("lisp error:\n{e}"))?;
 
     println!("elapsed: {:?}", start.elapsed());
     Ok(())

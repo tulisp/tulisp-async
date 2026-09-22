@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 (princ (format "fired: %d\n" fired))
 "#,
     )
-    .map_err(|e| format!("lisp error:\n{}", e.format(&ctx)))?;
+    .map_err(|e| format!("lisp error:\n{e}"))?;
 
     Ok(())
 }
