@@ -103,12 +103,17 @@ behind a feature here, mirroring `src/tokio.rs`).
   or `Handle::tick(&mut ctx)` from Rust.
 - **Runtime-agnostic core.** No tokio types appear in the public API
   outside the `tokio` module.
-- **A `quit` ends the drain.** When the context's interrupt check
-  (`TulispContext::set_interrupt_check`) stops a timer body with
-  `quit`, that timer does not fire again, even if it repeats.
-  `(sleep-for …)` signals the `quit` to its caller, and the `Handle`
-  methods return it. The other due timers stay queued. Other errors
-  from a body go to stderr, and the drain goes on.
+- **A stopped body ends the drain.** A timer body that ends in
+  `quit`, which the context's interrupt check
+  (`TulispContext::set_interrupt_check`) raises and the body can raise
+  itself, or in the `Interrupted` error of an `Interrupt::Stop`, stops
+  the drain, and its timer does not fire again, even if it repeats.
+  `(sleep-for …)` passes the error on to its caller, and the `Handle`
+  methods return it. So a body stopped inside another body's
+  `(sleep-for …)` stops that body too, when the error ends it: a body
+  can catch a `quit`, but no handler catches the `Interrupted` error.
+  The other due timers stay queued. Other errors from a body go to
+  stderr, and the drain goes on.
 
 ## Footguns
 

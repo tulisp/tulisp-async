@@ -12,7 +12,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tulisp::{Error, TulispContext, TulispObject};
+use tulisp::{Error, ErrorKind, TulispContext, TulispObject};
 
 use crate::{Clock, Executor, TimerHandle};
 
@@ -114,13 +114,15 @@ pub(crate) fn drain_until(
     }
 }
 
-/// Run TASK's body on CTX, unless it was cancelled, and queue its next
-/// firing if it repeats. The body can cancel its own timer, which stops
-/// the next firing.
+/// Run `task`'s body on `ctx`, unless it was cancelled, and queue its
+/// next firing if it repeats. The body can cancel its own timer, which
+/// stops the next firing.
 ///
-/// A body stopped by `quit`, which the host's interrupt check raises,
-/// returns it, and its timer does not fire again: a body that runs past
-/// the host's limit once would do so on every firing.
+/// When the body ends in `quit`, which the host's interrupt check raises
+/// and the body can raise itself, or in the `Interrupted` error of an
+/// `Interrupt::Stop`, `fire` returns that error and the timer does not
+/// fire again: a body that runs past the host's limit once would do so
+/// on every firing.
 pub(crate) fn fire(
     ctx: &mut TulispContext,
     mailbox: &Mailbox,
@@ -130,7 +132,7 @@ pub(crate) fn fire(
         return Ok(());
     }
     if let Err(e) = ctx.apply(&task.body, &task.args) {
-        if e.is_a(ctx, "quit") {
+        if e.is_a(ctx, "quit") || matches!(e.kind(), ErrorKind::Interrupted) {
             return Err(e);
         }
         eprintln!("run-with-timer: {e}");

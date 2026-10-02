@@ -662,3 +662,55 @@ async fn run_until_idle_ends_on_quit() {
         .expect_err("quit");
     assert!(err.is_a(&ctx, "quit"), "{err}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repeating_timer_stopped_by_the_host_does_not_fire_again() {
+    let (mut ctx, handle, clock) = setup_manual();
+    eval_ok(&mut ctx, "(setq counter 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0 1 (lambda () (setq counter (1+ counter)) (while t)))",
+    );
+    ctx.set_interrupt_check(|| tulisp::Interrupt::Stop("over time".to_string()));
+    let err = handle.tick(&mut ctx).expect_err("stop");
+    assert!(
+        matches!(err.kind(), tulisp::ErrorKind::Interrupted),
+        "{err}"
+    );
+    clock.advance(Duration::from_secs(1));
+    handle.tick(&mut ctx).unwrap();
+    ctx.clear_interrupt_check();
+    assert_eq!(eval_i64(&mut ctx, "counter"), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sleep_for_passes_on_a_stop_from_a_timer() {
+    let mut ctx = setup();
+    eval_ok(&mut ctx, "(run-with-timer 0 nil (lambda () (while t)))");
+    ctx.set_interrupt_check(|| tulisp::Interrupt::Stop("over time".to_string()));
+    let err = ctx.eval_string("(sleep-for 0.05)").expect_err("stop");
+    assert!(
+        matches!(err.kind(), tulisp::ErrorKind::Interrupted),
+        "{err}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_for_ends_the_window_on_a_stop() {
+    let (mut ctx, handle, clock) = setup_manual();
+    eval_ok(&mut ctx, "(setq ran nil)");
+    eval_ok(&mut ctx, "(run-with-timer 1 1 (lambda () (while t)))");
+    eval_ok(&mut ctx, "(run-with-timer 5 nil (lambda () (setq ran t)))");
+    ctx.set_interrupt_check(|| tulisp::Interrupt::Stop("over time".to_string()));
+    let err = handle
+        .run_for(&mut ctx, Duration::from_secs(10))
+        .await
+        .expect_err("stop");
+    ctx.clear_interrupt_check();
+    assert!(
+        matches!(err.kind(), tulisp::ErrorKind::Interrupted),
+        "{err}"
+    );
+    assert_eq!(clock.elapsed(), Duration::from_secs(1));
+    assert_eq!(format!("{}", eval_ok(&mut ctx, "ran")), "nil");
+}

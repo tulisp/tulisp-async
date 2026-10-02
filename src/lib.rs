@@ -220,11 +220,14 @@ impl Handle {
     /// that next firing — call again after time has elapsed, or use
     /// `(sleep-for …)` from lisp, which drains while it waits.
     ///
-    /// A body stopped by `quit`, which the context's interrupt check
-    /// raises, ends the drain: `tick` returns that error, the timer does
-    /// not fire again, and the other due timers stay queued for the next
-    /// call. Any other error from a body goes to stderr, and the drain
-    /// goes on.
+    /// A body that ends in `quit`, which the context's interrupt check
+    /// raises and the body can raise itself, or in the `Interrupted`
+    /// error of an `Interrupt::Stop`, ends the drain: `tick` returns
+    /// that error, the timer does not fire again, and the other due
+    /// timers stay queued for the next call. When a body is stopped
+    /// inside another body's `(sleep-for …)`, that call returns the
+    /// error, and a waiting body that ends in it counts as stopped too.
+    /// Any other error from a body goes to stderr, and the drain goes on.
     pub fn tick(&self, ctx: &mut TulispContext) -> Result<(), Error> {
         let now = self.clock.now();
         pending::drain_until(ctx, &self.mailbox, &*self.executor, &*self.clock, now)
