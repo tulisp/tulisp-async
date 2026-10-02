@@ -442,6 +442,14 @@ async fn tick_leaves_future_timers_pending() {
 
 // -- manual (sim-time) clock --------------------------------------------
 
+#[test]
+fn manual_clock_advance_saturates() {
+    let clock = tulisp_async::ManualClock::new();
+    clock.advance(Duration::MAX);
+    clock.advance(Duration::from_secs(1));
+    assert_eq!(clock.elapsed(), Duration::from_nanos(u64::MAX));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn manual_clock_fires_one_shot_on_advanced_time() {
     use tulisp_async::ManualClock;

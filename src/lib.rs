@@ -104,11 +104,15 @@ impl ManualClock {
     /// monotonic.
     pub fn advance(&self, dur: Duration) {
         let nanos = u64::try_from(dur.as_nanos()).unwrap_or(u64::MAX);
-        self.elapsed_nanos
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |e| {
-                Some(e.saturating_add(nanos))
-            })
-            .ok();
+        let mut elapsed = self.elapsed_nanos.load(Ordering::Relaxed);
+        while let Err(current) = self.elapsed_nanos.compare_exchange_weak(
+            elapsed,
+            elapsed.saturating_add(nanos),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            elapsed = current;
+        }
     }
 
     /// Simulated time elapsed since construction.
