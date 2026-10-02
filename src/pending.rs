@@ -110,24 +110,27 @@ pub(crate) fn drain_until(
         if !wait.is_zero() {
             executor.sleep_blocking(wait);
         }
-        if task.cancel.is_cancelled() {
-            continue;
-        }
-        if let Err(e) = ctx.apply(&task.body, &task.args) {
-            eprintln!("run-with-timer: {e}");
-        }
-        // Re-check after the call: the body can cancel its own handle.
-        if task.cancel.is_cancelled() {
-            continue;
-        }
-        if let Some(repeat) = task.repeat {
-            mailbox.lock().unwrap().push(PendingTask {
-                deadline: task.deadline + repeat,
-                repeat: Some(repeat),
-                body: task.body,
-                args: task.args,
-                cancel: task.cancel,
-            });
-        }
+        fire(ctx, mailbox, task);
+    }
+}
+
+/// Run TASK's body on CTX, unless it was cancelled, and queue its next
+/// firing if it repeats. The body can cancel its own timer, which stops
+/// the next firing.
+pub(crate) fn fire(ctx: &mut TulispContext, mailbox: &Mailbox, task: PendingTask) {
+    if task.cancel.is_cancelled() {
+        return;
+    }
+    if let Err(e) = ctx.apply(&task.body, &task.args) {
+        eprintln!("run-with-timer: {e}");
+    }
+    if task.cancel.is_cancelled() {
+        return;
+    }
+    if let Some(repeat) = task.repeat {
+        mailbox.lock().unwrap().push(PendingTask {
+            deadline: task.deadline + repeat,
+            ..task
+        });
     }
 }

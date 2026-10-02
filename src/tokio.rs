@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use tulisp::TulispContext;
 
-use crate::pending::{self, Mailbox, PendingTask};
+use crate::pending::{self, Mailbox};
 use crate::{Clock, Executor};
 
 /// Drives sleeps and timers on a tokio runtime. Construct inside a tokio
@@ -80,23 +80,6 @@ pub(crate) async fn run_until(
         if !wait.is_zero() {
             tokio::time::sleep(wait).await;
         }
-        if task.cancel.is_cancelled() {
-            continue;
-        }
-        if let Err(e) = ctx.apply(&task.body, &task.args) {
-            eprintln!("run-with-timer: {e}");
-        }
-        if task.cancel.is_cancelled() {
-            continue;
-        }
-        if let Some(repeat) = task.repeat {
-            mailbox.lock().unwrap().push(PendingTask {
-                deadline: task.deadline + repeat,
-                repeat: Some(repeat),
-                body: task.body,
-                args: task.args,
-                cancel: task.cancel,
-            });
-        }
+        pending::fire(ctx, mailbox, task);
     }
 }
