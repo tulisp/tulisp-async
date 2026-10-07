@@ -288,6 +288,32 @@ async fn run_for_a_window_past_the_end_of_the_clock_runs_until_idle() {
     assert_eq!(eval_i64(&mut ctx, "fired"), 1);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn the_body_error_handler_takes_the_errors_that_do_not_stop_the_drain() {
+    let (mut ctx, handle, clock) = setup_manual();
+    let errors = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = errors.clone();
+    // A clone shares the handler with every drain of the register call.
+    handle.clone().set_body_error_handler(move |ctx, err| {
+        // The body's own context, so it holds the count the body just set.
+        let fired = eval_i64(ctx, "fired");
+        seen.lock().unwrap().push((fired, err.to_string()));
+    });
+    eval_ok(&mut ctx, "(setq fired 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0 1 (lambda () (setq fired (1+ fired)) (error \"boom\")))",
+    );
+    handle.tick(&mut ctx).unwrap();
+    clock.advance(Duration::from_secs(1));
+    eval_ok(&mut ctx, "(sleep-for 0)");
+    assert_eq!(eval_i64(&mut ctx, "fired"), 2);
+    let errors = errors.lock().unwrap();
+    let counts: Vec<i64> = errors.iter().map(|(fired, _)| *fired).collect();
+    assert_eq!(counts, [1, 2], "{errors:?}");
+    assert!(errors.iter().all(|(_, e)| e.contains("boom")), "{errors:?}");
+}
+
 // -- body re-entrancy ---------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]

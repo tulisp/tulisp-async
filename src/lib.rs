@@ -207,7 +207,7 @@ impl TulispAny for TimerHandle {
 /// to tick while another monitors the same queue for diagnostics.
 #[derive(Clone)]
 pub struct Handle {
-    mailbox: pending::Mailbox,
+    mailbox: Arc<pending::Mailbox>,
     executor: Arc<dyn Executor>,
     clock: Arc<dyn Clock>,
 }
@@ -227,10 +227,24 @@ impl Handle {
     /// timers stay queued for the next call. When a body is stopped
     /// inside another body's `(sleep-for …)`, that call returns the
     /// error, and a waiting body that ends in it counts as stopped too.
-    /// Any other error from a body goes to stderr, and the drain goes on.
+    /// Any other error from a body goes to the handler set with
+    /// [`set_body_error_handler`](Self::set_body_error_handler), or to
+    /// stderr, and the drain goes on.
     pub fn tick(&self, ctx: &mut TulispContext) -> Result<(), Error> {
         let now = self.clock.now();
         pending::drain_until(ctx, &self.mailbox, &*self.executor, &*self.clock, now)
+    }
+
+    /// Send the error of each timer body that fails without stopping the
+    /// drain to `handler`, with the context the body ran on, in place of
+    /// stderr. The drain goes on after the call. One handler serves every
+    /// drain of this `register` call — `(sleep-for …)` and every clone of
+    /// the Handle — and a later call replaces it.
+    pub fn set_body_error_handler(
+        &self,
+        handler: impl Fn(&mut TulispContext, Error) + Send + Sync + 'static,
+    ) {
+        *self.mailbox.body_error_handler.lock().unwrap() = Arc::new(handler);
     }
 
     /// Drive the timer queue asynchronously on the Handle's clock,
@@ -336,7 +350,7 @@ pub fn register_with_clock(
                 .and_then(|r| Duration::try_from_secs_f64(r).ok())
                 .filter(|r| !r.is_zero());
             let handle = TimerHandle::new();
-            mb_timer.lock().unwrap().push(pending::PendingTask {
+            mb_timer.tasks.lock().unwrap().push(pending::PendingTask {
                 deadline,
                 repeat,
                 body: f,

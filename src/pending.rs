@@ -32,14 +32,29 @@ pub(crate) struct PendingTask {
     pub(crate) cancel: TimerHandle,
 }
 
-/// Shared queue of pending firings. `Arc<Mutex<Vec<_>>>` rather than a
-/// channel because the driver wants to peek at the earliest deadline
-/// without consuming, and a new `(run-with-timer …)` from inside a
-/// firing body needs to be visible to the same draining loop.
-pub(crate) type Mailbox = Arc<Mutex<Vec<PendingTask>>>;
+/// A host's handler for an error that ends a timer body but not the
+/// drain; see
+/// [`Handle::set_body_error_handler`](crate::Handle::set_body_error_handler).
+pub(crate) type BodyErrorHandler = Arc<dyn Fn(&mut TulispContext, Error) + Send + Sync>;
 
-pub(crate) fn new_mailbox() -> Mailbox {
-    Arc::new(Mutex::new(Vec::new()))
+/// What one `register` call shares between its builtins and its Handle.
+pub(crate) struct Mailbox {
+    /// Pending firings. A `Vec` rather than a channel because the driver
+    /// wants to peek at the earliest deadline without consuming, and a new
+    /// `(run-with-timer …)` from inside a firing body needs to be visible
+    /// to the same draining loop.
+    pub(crate) tasks: Mutex<Vec<PendingTask>>,
+    /// Where body errors go; stderr until the host sets a handler.
+    pub(crate) body_error_handler: Mutex<BodyErrorHandler>,
+}
+
+pub(crate) fn new_mailbox() -> Arc<Mailbox> {
+    let stderr: BodyErrorHandler =
+        Arc::new(|_: &mut TulispContext, e: Error| eprintln!("run-with-timer: {e}"));
+    Arc::new(Mailbox {
+        tasks: Mutex::new(Vec::new()),
+        body_error_handler: Mutex::new(stderr),
+    })
 }
 
 /// Index of the earliest-deadline, not-cancelled task. `None` if every
@@ -64,7 +79,7 @@ fn earliest_pending(tasks: &[PendingTask]) -> Option<usize> {
 /// inside these two calls: a body can re-enter the mailbox, by calling
 /// `run-with-timer` or a nested `sleep-for`.
 pub(crate) fn next_deadline(mailbox: &Mailbox, wake: Option<Instant>) -> Option<Instant> {
-    let mut tasks = mailbox.lock().unwrap();
+    let mut tasks = mailbox.tasks.lock().unwrap();
     tasks.retain(|t| !t.cancel.is_cancelled());
     let deadline = tasks[earliest_pending(&tasks)?].deadline;
     wake.is_none_or(|w| deadline <= w).then_some(deadline)
@@ -72,7 +87,7 @@ pub(crate) fn next_deadline(mailbox: &Mailbox, wake: Option<Instant>) -> Option<
 
 /// Take the earliest live task whose deadline is at or before `at`.
 pub(crate) fn pop_due(mailbox: &Mailbox, at: Instant) -> Option<PendingTask> {
-    let mut tasks = mailbox.lock().unwrap();
+    let mut tasks = mailbox.tasks.lock().unwrap();
     let i = earliest_pending(&tasks)?;
     (tasks[i].deadline <= at).then(|| tasks.remove(i))
 }
@@ -87,9 +102,9 @@ pub(crate) fn pop_due(mailbox: &Mailbox, at: Instant) -> Option<PendingTask> {
 /// timer body itself runs synchronously on the calling thread, so the
 /// caller's mutable borrow on `ctx` is the only one in play.
 ///
-/// Errors from a firing body are written to stderr — one bad timer
-/// shouldn't shut down the rest of the program — and the loop
-/// continues; a stopped body ends the loop with its error (see
+/// Errors from a firing body go to the host's handler, or to stderr —
+/// one bad timer shouldn't shut down the rest of the program — and the
+/// loop continues; a stopped body ends the loop with its error (see
 /// [`fire`]). The body itself can cancel the timer (via `cancel-timer`)
 /// or register more timers; both are observed in the next iteration.
 pub(crate) fn drain_until(
@@ -146,7 +161,9 @@ pub(crate) fn fire(
         if e.is_a(ctx, "quit") || matches!(e.kind(), ErrorKind::Interrupted) {
             return Err(e);
         }
-        eprintln!("run-with-timer: {e}");
+        // Cloned out, so a handler can set a new one without a deadlock.
+        let handler = mailbox.body_error_handler.lock().unwrap().clone();
+        handler(ctx, e);
     }
     if task.cancel.is_cancelled() {
         return Ok(());
@@ -154,6 +171,7 @@ pub(crate) fn fire(
     // A next firing past the end of the clock never comes.
     if let Some(deadline) = task.repeat.and_then(|r| task.deadline.checked_add(r)) {
         mailbox
+            .tasks
             .lock()
             .unwrap()
             .push(PendingTask { deadline, ..task });

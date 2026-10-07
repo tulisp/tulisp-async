@@ -75,6 +75,10 @@ the design notes below):
   firings beyond that window. A `dur` too large for an `Instant`, such
   as `Duration::MAX`, means no bound, as in `run_until_idle`.
 
+`handle.set_body_error_handler(|ctx, err| …)` takes the error of each
+body that fails without stopping the drain, which otherwise goes to
+stderr.
+
 `Handle` is `Clone` (shallow — clones share the same mailbox) and
 `Send + Sync`, so it can travel into a spawned tokio task that
 wants to tick the queue from elsewhere.
@@ -113,8 +117,9 @@ behind a feature here, mirroring `src/tokio.rs`).
   methods return it. So a body stopped inside another body's
   `(sleep-for …)` stops that body too, when the error ends it: a body
   can catch a `quit`, but no handler catches the `Interrupted` error.
-  The other due timers stay queued. Other errors from a body go to
-  stderr, and the drain goes on.
+  The other due timers stay queued. Other errors from a body go to the
+  handler set with `set_body_error_handler`, or to stderr, and the
+  drain goes on.
 
 ## Footguns
 
