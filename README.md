@@ -60,15 +60,16 @@ main-loop behavior.
 ## Driving from Rust
 
 `register` returns a `Handle` that lets non-lisp callers drive the
-timer queue without going through `(sleep-for …)`. Three methods:
+timer queue without going through `(sleep-for …)`. Three methods, each
+returning `Result<(), tulisp::Error>`:
 
-- `handle.tick(&mut ctx)` — sync. Fires every body whose deadline has
+- `handle.tick(&mut ctx)?` — sync. Fires every body whose deadline has
   already passed; returns immediately when none remain.
-- `handle.run_until_idle(&mut ctx).await` — async (tokio feature).
+- `handle.run_until_idle(&mut ctx).await?` — async (tokio feature).
   Awaits each task's deadline via `tokio::time::sleep`, fires, repeats
   until the mailbox is empty. Repeating timers re-push themselves, so
   the future runs until every timer self-cancels.
-- `handle.run_for(&mut ctx, dur).await` — async (tokio feature). Same
+- `handle.run_for(&mut ctx, dur).await?` — async (tokio feature). Same
   drain loop but bounded — returns after `dur` regardless of pending
   firings beyond that window.
 

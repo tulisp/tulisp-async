@@ -215,9 +215,9 @@ impl Handle {
     /// with their next deadline, but `tick` does not block waiting for
     /// that next firing — call again after time has elapsed, or use
     /// `(sleep-for …)` from lisp, which drains while it waits.
-    pub fn tick(&self, ctx: &mut TulispContext) {
+    pub fn tick(&self, ctx: &mut TulispContext) -> Result<(), Error> {
         let now = self.clock.now();
-        pending::drain_until(ctx, &self.mailbox, &*self.executor, &*self.clock, now);
+        pending::drain_until(ctx, &self.mailbox, &*self.executor, &*self.clock, now)
     }
 
     /// Drive the timer queue asynchronously on the Handle's clock,
@@ -229,7 +229,7 @@ impl Handle {
     /// Drop the returned future or `select!` against a shutdown
     /// signal to stop earlier.
     #[cfg(feature = "tokio")]
-    pub async fn run_until_idle(&self, ctx: &mut TulispContext) {
+    pub async fn run_until_idle(&self, ctx: &mut TulispContext) -> Result<(), Error> {
         crate::tokio::run_until(ctx, &self.mailbox, &*self.clock, None).await
     }
 
@@ -241,7 +241,7 @@ impl Handle {
     /// window stay in the mailbox for a future `tick` / `run_until_idle`
     /// / `run_for`.
     #[cfg(feature = "tokio")]
-    pub async fn run_for(&self, ctx: &mut TulispContext, dur: Duration) {
+    pub async fn run_for(&self, ctx: &mut TulispContext, dur: Duration) -> Result<(), Error> {
         let wake = self.clock.now() + dur;
         crate::tokio::run_until(ctx, &self.mailbox, &*self.clock, Some(wake)).await
     }
@@ -299,8 +299,7 @@ pub fn register_with_clock(
             )));
         }
         let wake = clk_sleep.now() + Duration::from_secs_f64(secs);
-        pending::drain_until(ctx, &mb_sleep, &*exec_sleep, &*clk_sleep, wake);
-        Ok(())
+        pending::drain_until(ctx, &mb_sleep, &*exec_sleep, &*clk_sleep, wake)
     });
 
     let mb_timer = mailbox.clone();

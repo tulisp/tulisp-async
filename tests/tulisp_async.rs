@@ -364,7 +364,7 @@ async fn tick_fires_due_timers_without_sleep_for() {
         "(run-with-timer 0 nil (lambda () (setq counter (1+ counter))))",
     );
     // No (sleep-for …) — drive from Rust instead.
-    handle.tick(&mut ctx);
+    handle.tick(&mut ctx).unwrap();
     assert_eq!(eval_i64(&mut ctx, "counter"), 1);
 }
 
@@ -381,7 +381,7 @@ async fn run_until_idle_drains_self_cancelling_timer() {
                      (when (>= counter 3) (cancel-timer h)))))",
     );
     let start = Instant::now();
-    handle.run_until_idle(&mut ctx).await;
+    handle.run_until_idle(&mut ctx).await.unwrap();
     let elapsed = start.elapsed();
     assert_eq!(eval_i64(&mut ctx, "counter"), 3);
     // Each fire awaits ~20ms; three fires + bookkeeping ≈ 60ms.
@@ -401,7 +401,10 @@ async fn run_for_fires_window_and_returns() {
         "(run-with-timer 0.02 0.02 (lambda () (setq counter (1+ counter))))",
     );
     let start = Instant::now();
-    handle.run_for(&mut ctx, Duration::from_millis(150)).await;
+    handle
+        .run_for(&mut ctx, Duration::from_millis(150))
+        .await
+        .unwrap();
     let elapsed = start.elapsed();
     let fired = eval_i64(&mut ctx, "counter");
     // 0.02 .. 0.14 in 0.02 steps → expect ~7 firings, allow slop.
@@ -419,7 +422,7 @@ async fn run_until_idle_returns_on_empty_mailbox() {
     let handle = tulisp_async::register(&mut ctx, Arc::new(TokioExecutor::new()));
     // No timers registered — should return immediately.
     let start = Instant::now();
-    handle.run_until_idle(&mut ctx).await;
+    handle.run_until_idle(&mut ctx).await.unwrap();
     assert!(start.elapsed() < Duration::from_millis(50));
 }
 
@@ -432,7 +435,7 @@ async fn tick_leaves_future_timers_pending() {
         &mut ctx,
         "(run-with-timer 10 nil (lambda () (setq counter (1+ counter))))",
     );
-    handle.tick(&mut ctx);
+    handle.tick(&mut ctx).unwrap();
     // Timer is 10s out — tick must return immediately without firing.
     assert_eq!(eval_i64(&mut ctx, "counter"), 0);
 }
@@ -453,11 +456,11 @@ async fn manual_clock_fires_one_shot_on_advanced_time() {
     );
     let start = Instant::now();
     // Clock still at 0 — nothing due.
-    handle.tick(&mut ctx);
+    handle.tick(&mut ctx).unwrap();
     assert_eq!(eval_i64(&mut ctx, "counter"), 0);
     // Advance past the deadline; the timer fires with no real sleeping.
     clock.advance(Duration::from_secs(5));
-    handle.tick(&mut ctx);
+    handle.tick(&mut ctx).unwrap();
     assert_eq!(eval_i64(&mut ctx, "counter"), 1);
     assert!(
         start.elapsed() < Duration::from_millis(500),
@@ -480,7 +483,7 @@ async fn manual_clock_repeats_per_advanced_interval() {
     );
     // Jump 15 s and drain once: the 5 s repeater is due at 5/10/15.
     clock.advance(Duration::from_secs(15));
-    handle.tick(&mut ctx);
+    handle.tick(&mut ctx).unwrap();
     assert_eq!(eval_i64(&mut ctx, "counter"), 3);
 }
 
@@ -529,7 +532,7 @@ async fn manual_clock_run_until_idle_fast_forwards_without_real_sleep() {
         "(setq h (run-with-timer 5.0 5.0 (lambda () (setq counter (1+ counter)) (when (>= counter 3) (cancel-timer h)))))",
     );
     let start = Instant::now();
-    handle.run_until_idle(&mut ctx).await;
+    handle.run_until_idle(&mut ctx).await.unwrap();
     assert_eq!(eval_i64(&mut ctx, "counter"), 3);
     assert!(
         start.elapsed() < Duration::from_millis(500),
@@ -552,10 +555,16 @@ async fn manual_clock_run_for_uses_sim_window() {
     );
     let start = Instant::now();
     // 12 sim-seconds covers the firings at 5 and 10, not the one at 15.
-    handle.run_for(&mut ctx, Duration::from_secs(12)).await;
+    handle
+        .run_for(&mut ctx, Duration::from_secs(12))
+        .await
+        .unwrap();
     assert_eq!(eval_i64(&mut ctx, "counter"), 2);
     // A further 5 sim-seconds (window now reaches 17) fires the one at 15.
-    handle.run_for(&mut ctx, Duration::from_secs(5)).await;
+    handle
+        .run_for(&mut ctx, Duration::from_secs(5))
+        .await
+        .unwrap();
     assert_eq!(eval_i64(&mut ctx, "counter"), 3);
     assert!(
         start.elapsed() < Duration::from_millis(500),

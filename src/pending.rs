@@ -12,7 +12,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tulisp::{TulispContext, TulispObject};
+use tulisp::{Error, TulispContext, TulispObject};
 
 use crate::{Clock, Executor, TimerHandle};
 
@@ -75,7 +75,7 @@ pub(crate) fn drain_until(
     executor: &dyn Executor,
     clock: &dyn Clock,
     wake: Instant,
-) {
+) -> Result<(), Error> {
     loop {
         // Lock just long enough to reap cancelled entries and pop the
         // next firing whose deadline falls before `wake`. The body
@@ -101,7 +101,7 @@ pub(crate) fn drain_until(
             if !wait.is_zero() {
                 executor.sleep_blocking(wait);
             }
-            return;
+            return Ok(());
         };
 
         // Reach this firing's deadline before running it: a wall clock
@@ -110,22 +110,26 @@ pub(crate) fn drain_until(
         if !wait.is_zero() {
             executor.sleep_blocking(wait);
         }
-        fire(ctx, mailbox, task);
+        fire(ctx, mailbox, task)?;
     }
 }
 
 /// Run TASK's body on CTX, unless it was cancelled, and queue its next
 /// firing if it repeats. The body can cancel its own timer, which stops
 /// the next firing.
-pub(crate) fn fire(ctx: &mut TulispContext, mailbox: &Mailbox, task: PendingTask) {
+pub(crate) fn fire(
+    ctx: &mut TulispContext,
+    mailbox: &Mailbox,
+    task: PendingTask,
+) -> Result<(), Error> {
     if task.cancel.is_cancelled() {
-        return;
+        return Ok(());
     }
     if let Err(e) = ctx.apply(&task.body, &task.args) {
         eprintln!("run-with-timer: {e}");
     }
     if task.cancel.is_cancelled() {
-        return;
+        return Ok(());
     }
     if let Some(repeat) = task.repeat {
         mailbox.lock().unwrap().push(PendingTask {
@@ -133,4 +137,5 @@ pub(crate) fn fire(ctx: &mut TulispContext, mailbox: &Mailbox, task: PendingTask
             ..task
         });
     }
+    Ok(())
 }

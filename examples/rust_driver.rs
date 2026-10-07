@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // One await drives the queue. Returns when the timer body cancels
     // itself and the mailbox empties.
-    handle.run_until_idle(&mut ctx).await;
+    handle.run_until_idle(&mut ctx).await?;
 
     // Close the channel so the reader exits: the sender lives inside
     // the `send-msg` defun closure (and in the lambda's compiled

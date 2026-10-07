@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use tulisp::TulispContext;
+use tulisp::{Error, TulispContext};
 
 use crate::pending::{self, Mailbox};
 use crate::{Clock, Executor};
@@ -55,7 +55,7 @@ pub(crate) async fn run_until(
     mailbox: &Mailbox,
     clock: &dyn Clock,
     wake: Option<Instant>,
-) {
+) -> Result<(), Error> {
     loop {
         let popped = {
             let mut tasks = mailbox.lock().unwrap();
@@ -73,13 +73,13 @@ pub(crate) async fn run_until(
                     tokio::time::sleep(wait).await;
                 }
             }
-            return;
+            return Ok(());
         };
 
         let wait = clock.advance_to(task.deadline);
         if !wait.is_zero() {
             tokio::time::sleep(wait).await;
         }
-        pending::fire(ctx, mailbox, task);
+        pending::fire(ctx, mailbox, task)?;
     }
 }
