@@ -61,7 +61,8 @@ main-loop behavior.
 
 `register` returns a `Handle` that lets non-lisp callers drive the
 timer queue without going through `(sleep-for …)`. Three methods, each
-returning `Result<(), tulisp::Error>`:
+returning `Result<(), tulisp::Error>`, the error of a stopped body (see
+the design notes below):
 
 - `handle.tick(&mut ctx)?` — sync. Fires every body whose deadline has
   already passed; returns immediately when none remain.
@@ -102,6 +103,12 @@ behind a feature here, mirroring `src/tokio.rs`).
   or `Handle::tick(&mut ctx)` from Rust.
 - **Runtime-agnostic core.** No tokio types appear in the public API
   outside the `tokio` module.
+- **A `quit` ends the drain.** When the context's interrupt check
+  (`TulispContext::set_interrupt_check`) stops a timer body with
+  `quit`, that timer does not fire again, even if it repeats.
+  `(sleep-for …)` signals the `quit` to its caller, and the `Handle`
+  methods return it. The other due timers stay queued. Other errors
+  from a body go to stderr, and the drain goes on.
 
 ## Footguns
 

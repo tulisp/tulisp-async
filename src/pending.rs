@@ -66,9 +66,9 @@ pub(crate) fn earliest_pending(tasks: &[PendingTask]) -> Option<usize> {
 ///
 /// Errors from a firing body are written to stderr — one bad timer
 /// shouldn't shut down the rest of the program — and the loop
-/// continues. The body itself can cancel the timer (via
-/// `cancel-timer`) or register more timers; both are observed in the
-/// next iteration.
+/// continues; a stopped body ends the loop with its error (see
+/// [`fire`]). The body itself can cancel the timer (via `cancel-timer`)
+/// or register more timers; both are observed in the next iteration.
 pub(crate) fn drain_until(
     ctx: &mut TulispContext,
     mailbox: &Mailbox,
@@ -117,6 +117,10 @@ pub(crate) fn drain_until(
 /// Run TASK's body on CTX, unless it was cancelled, and queue its next
 /// firing if it repeats. The body can cancel its own timer, which stops
 /// the next firing.
+///
+/// A body stopped by `quit`, which the host's interrupt check raises,
+/// returns it, and its timer does not fire again: a body that runs past
+/// the host's limit once would do so on every firing.
 pub(crate) fn fire(
     ctx: &mut TulispContext,
     mailbox: &Mailbox,
@@ -126,6 +130,9 @@ pub(crate) fn fire(
         return Ok(());
     }
     if let Err(e) = ctx.apply(&task.body, &task.args) {
+        if e.is_a(ctx, "quit") {
+            return Err(e);
+        }
         eprintln!("run-with-timer: {e}");
     }
     if task.cancel.is_cancelled() {

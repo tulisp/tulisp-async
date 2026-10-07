@@ -215,6 +215,12 @@ impl Handle {
     /// with their next deadline, but `tick` does not block waiting for
     /// that next firing — call again after time has elapsed, or use
     /// `(sleep-for …)` from lisp, which drains while it waits.
+    ///
+    /// A body stopped by `quit`, which the context's interrupt check
+    /// raises, ends the drain: `tick` returns that error, the timer does
+    /// not fire again, and the other due timers stay queued for the next
+    /// call. Any other error from a body goes to stderr, and the drain
+    /// goes on.
     pub fn tick(&self, ctx: &mut TulispContext) -> Result<(), Error> {
         let now = self.clock.now();
         pending::drain_until(ctx, &self.mailbox, &*self.executor, &*self.clock, now)
@@ -225,9 +231,10 @@ impl Handle {
     /// virtual clock, jumping to it for free), until the mailbox has no
     /// live entries left. Repeating timers re-push themselves, so
     /// this future does not return until every timer has been
-    /// cancelled (typically from inside a body via `cancel-timer`).
-    /// Drop the returned future or `select!` against a shutdown
-    /// signal to stop earlier.
+    /// cancelled (typically from inside a body via `cancel-timer`), or
+    /// a body is stopped, which returns the error as
+    /// [`tick`](Self::tick) does. Drop the returned future or `select!`
+    /// against a shutdown signal to stop earlier.
     #[cfg(feature = "tokio")]
     pub async fn run_until_idle(&self, ctx: &mut TulispContext) -> Result<(), Error> {
         crate::tokio::run_until(ctx, &self.mailbox, &*self.clock, None).await
@@ -239,7 +246,8 @@ impl Handle {
     /// `dur` of sim-time and is fast-forwarded with no real waiting.
     /// Repeating timers re-push themselves; firings scheduled beyond the
     /// window stay in the mailbox for a future `tick` / `run_until_idle`
-    /// / `run_for`.
+    /// / `run_for`. A stopped body ends the window early and returns the
+    /// error, as in [`tick`](Self::tick).
     #[cfg(feature = "tokio")]
     pub async fn run_for(&self, ctx: &mut TulispContext, dur: Duration) -> Result<(), Error> {
         let wake = self.clock.now() + dur;

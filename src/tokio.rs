@@ -50,6 +50,8 @@ impl Executor for TokioExecutor {
 /// virtual clock the residual is zero, so this fast-forwards sim-time with
 /// no real waiting. Repeating timers re-push themselves, so a caller that
 /// picks `None` must arrange for every timer to cancel itself eventually.
+/// A stopped body ends the run with its error, as in
+/// `pending::drain_until`.
 pub(crate) async fn run_until(
     ctx: &mut TulispContext,
     mailbox: &Mailbox,

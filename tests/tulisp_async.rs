@@ -572,3 +572,85 @@ async fn manual_clock_run_for_uses_sim_window() {
         start.elapsed()
     );
 }
+
+// -- quit ---------------------------------------------------------------
+
+/// A context on a `ManualClock`, so timers due at 0 fire on `tick` in
+/// the order they were added.
+fn setup_manual() -> (TulispContext, Handle, Arc<tulisp_async::ManualClock>) {
+    let mut ctx = TulispContext::new();
+    let clock = Arc::new(tulisp_async::ManualClock::new());
+    let handle =
+        tulisp_async::register_with_clock(&mut ctx, Arc::new(TokioExecutor::new()), clock.clone());
+    (ctx, handle, clock)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repeating_timer_stopped_by_quit_does_not_fire_again() {
+    let (mut ctx, handle, clock) = setup_manual();
+    eval_ok(&mut ctx, "(setq counter 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0 1 (lambda () (setq counter (1+ counter)) (while t)))",
+    );
+    ctx.set_interrupt_check(|| true);
+    let err = handle.tick(&mut ctx).expect_err("quit");
+    assert!(err.is_a(&ctx, "quit"), "{err}");
+    clock.advance(Duration::from_secs(1));
+    handle.tick(&mut ctx).unwrap();
+    ctx.clear_interrupt_check();
+    assert_eq!(eval_i64(&mut ctx, "counter"), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_quit_leaves_the_other_due_timers_queued() {
+    let (mut ctx, handle, _clock) = setup_manual();
+    eval_ok(&mut ctx, "(setq ran nil)");
+    eval_ok(&mut ctx, "(run-with-timer 0 nil (lambda () (while t)))");
+    eval_ok(&mut ctx, "(run-with-timer 0 nil (lambda () (setq ran t)))");
+    ctx.set_interrupt_check(|| true);
+    handle.tick(&mut ctx).expect_err("quit");
+    ctx.clear_interrupt_check();
+    assert_eq!(format!("{}", eval_ok(&mut ctx, "ran")), "nil");
+    handle.tick(&mut ctx).unwrap();
+    assert_eq!(format!("{}", eval_ok(&mut ctx, "ran")), "t");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_body_that_signals_quit_itself_ends_the_drain() {
+    let (mut ctx, handle, clock) = setup_manual();
+    eval_ok(&mut ctx, "(setq c 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0 1 (lambda () (setq c (1+ c)) (signal 'quit nil)))",
+    );
+    let err = handle.tick(&mut ctx).expect_err("quit");
+    assert!(err.is_a(&ctx, "quit"), "{err}");
+    clock.advance(Duration::from_secs(1));
+    handle.tick(&mut ctx).unwrap();
+    assert_eq!(eval_i64(&mut ctx, "c"), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sleep_for_signals_a_quit_from_a_timer() {
+    let mut ctx = setup();
+    eval_ok(&mut ctx, "(run-with-timer 0 nil (lambda () (while t)))");
+    ctx.set_interrupt_check(|| true);
+    let err = ctx.eval_string("(sleep-for 0.05)").expect_err("quit");
+    assert!(err.is_a(&ctx, "quit"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_until_idle_ends_on_quit() {
+    // On the wall clock, so the future yields between firings and the
+    // timeout can end a run that goes on.
+    let mut ctx = TulispContext::new();
+    let handle = tulisp_async::register(&mut ctx, Arc::new(TokioExecutor::new()));
+    eval_ok(&mut ctx, "(run-with-timer 0 0.1 (lambda () (while t)))");
+    ctx.set_interrupt_check(|| true);
+    let err = tokio::time::timeout(Duration::from_secs(2), handle.run_until_idle(&mut ctx))
+        .await
+        .expect("run_until_idle returns")
+        .expect_err("quit");
+    assert!(err.is_a(&ctx, "quit"), "{err}");
+}
