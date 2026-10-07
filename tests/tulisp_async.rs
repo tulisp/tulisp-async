@@ -79,6 +79,13 @@ async fn sleep_for_negative_errors() {
     assert!(err.contains("invalid duration"), "err = {err}");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn sleep_for_refuses_a_duration_too_large_to_reach() {
+    let mut ctx = setup();
+    let err = eval(&mut ctx, "(sleep-for 1.0e300)").unwrap_err();
+    assert!(err.contains("invalid duration"), "err = {err}");
+}
+
 // -- run-with-timer / cancel-timer --------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
@@ -229,6 +236,13 @@ async fn run_with_timer_invalid_secs_errors() {
     assert!(err.contains("invalid secs"), "err = {err}");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn run_with_timer_refuses_secs_too_large_to_reach() {
+    let mut ctx = setup();
+    let err = eval(&mut ctx, "(run-with-timer 1.0e300 nil (lambda () nil))").unwrap_err();
+    assert!(err.contains("invalid secs"), "err = {err}");
+}
+
 /// How many times a timer with `repeat` fires before the queue is idle,
 /// at most 2: the body cancels the timer when it fires again.
 async fn firings_with_repeat(repeat: &str) -> i64 {
@@ -251,8 +265,27 @@ async fn a_repeat_too_large_to_represent_fires_once() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_repeat_past_the_end_of_the_clock_stops_repeating() {
+    // 1e19 seconds fits a Duration, but not a Linux Instant, which counts
+    // seconds in an i64.
+    assert_eq!(firings_with_repeat("1.0e19").await, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_repeat_that_rounds_to_zero_fires_once() {
     assert_eq!(firings_with_repeat("1.0e-10").await, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_for_a_window_past_the_end_of_the_clock_runs_until_idle() {
+    let (mut ctx, handle, _clock) = setup_manual();
+    eval_ok(&mut ctx, "(setq fired 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 5 nil (lambda () (setq fired (1+ fired))))",
+    );
+    handle.run_for(&mut ctx, Duration::MAX).await.unwrap();
+    assert_eq!(eval_i64(&mut ctx, "fired"), 1);
 }
 
 // -- body re-entrancy ---------------------------------------------------

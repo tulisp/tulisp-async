@@ -72,7 +72,8 @@ the design notes below):
   the future runs until every timer self-cancels.
 - `handle.run_for(&mut ctx, dur).await?` — async (tokio feature). Same
   drain loop but bounded — returns after `dur` regardless of pending
-  firings beyond that window.
+  firings beyond that window. A `dur` too large for an `Instant`, such
+  as `Duration::MAX`, means no bound, as in `run_until_idle`.
 
 `Handle` is `Clone` (shallow — clones share the same mailbox) and
 `Send + Sync`, so it can travel into a spawned tokio task that

@@ -254,12 +254,24 @@ impl Handle {
     /// Repeating timers re-push themselves; firings scheduled beyond the
     /// window stay in the mailbox for a future `tick` / `run_until_idle`
     /// / `run_for`. A stopped body ends the window early and returns the
-    /// error, as in [`tick`](Self::tick).
+    /// error, as in [`tick`](Self::tick). A `dur` too large for an
+    /// `Instant`, such as `Duration::MAX`, has no end: the call runs
+    /// until idle, as [`run_until_idle`](Self::run_until_idle) does.
     #[cfg(feature = "tokio")]
     pub async fn run_for(&self, ctx: &mut TulispContext, dur: Duration) -> Result<(), Error> {
-        let wake = self.clock.now() + dur;
-        crate::tokio::run_until(ctx, &self.mailbox, &*self.clock, Some(wake)).await
+        let wake = self.clock.now().checked_add(dur);
+        crate::tokio::run_until(ctx, &self.mailbox, &*self.clock, wake).await
     }
+}
+
+/// `now` plus `secs` seconds, or an out-of-range error that starts with
+/// `what` when `secs` is negative, not a number, or too large for an
+/// `Instant`.
+fn deadline_after(now: Instant, secs: f64, what: &str) -> Result<Instant, Error> {
+    Duration::try_from_secs_f64(secs)
+        .ok()
+        .and_then(|d| now.checked_add(d))
+        .ok_or_else(|| Error::out_of_range(format!("{what}: {secs}")))
 }
 
 /// Wire `timerp`, `sleep-for`, `run-with-timer`, and `cancel-timer` into
@@ -308,12 +320,7 @@ pub fn register_with_clock(
     let mb_sleep = mailbox.clone();
     let clk_sleep = clock.clone();
     ctx.defun("sleep-for", move |ctx: &mut TulispContext, secs: f64| {
-        if !secs.is_finite() || secs < 0.0 {
-            return Err(Error::out_of_range(format!(
-                "sleep-for: invalid duration: {secs}"
-            )));
-        }
-        let wake = clk_sleep.now() + Duration::from_secs_f64(secs);
+        let wake = deadline_after(clk_sleep.now(), secs, "sleep-for: invalid duration")?;
         pending::drain_until(ctx, &mb_sleep, &*exec_sleep, &*clk_sleep, wake)
     });
 
@@ -322,11 +329,7 @@ pub fn register_with_clock(
     ctx.defun(
         "run-with-timer",
         move |secs: f64, repeat: Option<f64>, f: TulispObject, args: Rest<TulispObject>| {
-            if !secs.is_finite() || secs < 0.0 {
-                return Err(Error::out_of_range(format!(
-                    "run-with-timer: invalid secs: {secs}"
-                )));
-            }
+            let deadline = deadline_after(clk_timer.now(), secs, "run-with-timer: invalid secs")?;
             // A repeat that rounds to zero or is too large to represent is
             // one-shot, like a repeat that is not positive.
             let repeat = repeat
@@ -334,7 +337,7 @@ pub fn register_with_clock(
                 .filter(|r| !r.is_zero());
             let handle = TimerHandle::new();
             mb_timer.lock().unwrap().push(pending::PendingTask {
-                deadline: clk_timer.now() + Duration::from_secs_f64(secs),
+                deadline,
                 repeat,
                 body: f,
                 args: args.into(),

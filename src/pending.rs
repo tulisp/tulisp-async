@@ -19,7 +19,8 @@ use crate::{Clock, Executor, TimerHandle};
 /// A timer firing that hasn't happened yet. `deadline` is the absolute
 /// `Instant` the body should be called at. For one-shot timers
 /// `repeat` is `None`; for repeating timers it's the interval, and the
-/// driver re-pushes the task with `deadline + repeat` after each firing.
+/// driver re-pushes the task with `deadline + repeat` after each firing,
+/// unless that is too large for an `Instant`.
 /// `args` is the list of `&rest` arguments to pass to the body — `nil`
 /// if `(run-with-timer …)` was called with only the three required
 /// positional args.
@@ -150,11 +151,12 @@ pub(crate) fn fire(
     if task.cancel.is_cancelled() {
         return Ok(());
     }
-    if let Some(repeat) = task.repeat {
-        mailbox.lock().unwrap().push(PendingTask {
-            deadline: task.deadline + repeat,
-            ..task
-        });
+    // A next firing past the end of the clock never comes.
+    if let Some(deadline) = task.repeat.and_then(|r| task.deadline.checked_add(r)) {
+        mailbox
+            .lock()
+            .unwrap()
+            .push(PendingTask { deadline, ..task });
     }
     Ok(())
 }
