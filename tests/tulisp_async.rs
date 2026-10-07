@@ -802,6 +802,47 @@ async fn sleep_for_passes_on_a_stop_from_a_timer() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_stop_inside_a_timers_sleep_for_stops_that_timer_too() {
+    let (mut ctx, handle, clock) = setup_manual();
+    eval_ok(&mut ctx, "(setq a 0)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0 10 (lambda () (setq a (1+ a)) (sleep-for 1)))",
+    );
+    eval_ok(&mut ctx, "(run-with-timer 0.5 nil (lambda () (while t)))");
+    ctx.set_interrupt_check(|| tulisp::Interrupt::Stop("over time".to_string()));
+    let err = handle.tick(&mut ctx).expect_err("stop");
+    ctx.clear_interrupt_check();
+    assert!(
+        matches!(err.kind(), tulisp::ErrorKind::Interrupted),
+        "{err}"
+    );
+    clock.advance(Duration::from_secs(25));
+    handle.tick(&mut ctx).unwrap();
+    assert_eq!(eval_i64(&mut ctx, "a"), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_timer_that_catches_the_quit_in_its_sleep_for_goes_on() {
+    let (mut ctx, handle, clock) = setup_manual();
+    eval_ok(&mut ctx, "(setq a 0 caught nil)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0 10 \
+           (lambda () (setq a (1+ a)) (condition-case nil (sleep-for 1) (quit (setq caught t)))))",
+    );
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0.5 nil (lambda () (signal 'quit nil)))",
+    );
+    handle.tick(&mut ctx).unwrap();
+    assert_eq!(format!("{}", eval_ok(&mut ctx, "caught")), "t");
+    clock.advance(Duration::from_secs(10));
+    handle.tick(&mut ctx).unwrap();
+    assert_eq!(eval_i64(&mut ctx, "a"), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn run_for_ends_the_window_on_a_stop() {
     let (mut ctx, handle, clock) = setup_manual();
     eval_ok(&mut ctx, "(setq ran nil)");
