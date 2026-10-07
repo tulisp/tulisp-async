@@ -229,6 +229,32 @@ async fn run_with_timer_invalid_secs_errors() {
     assert!(err.contains("invalid secs"), "err = {err}");
 }
 
+/// How many times a timer with `repeat` fires before the queue is idle,
+/// at most 2: the body cancels the timer when it fires again.
+async fn firings_with_repeat(repeat: &str) -> i64 {
+    let (mut ctx, handle, _clock) = setup_manual();
+    eval_ok(&mut ctx, "(setq fired 0)");
+    eval_ok(
+        &mut ctx,
+        &format!(
+            "(setq timer (run-with-timer 0 {repeat} \
+               (lambda () (setq fired (1+ fired)) (when (> fired 1) (cancel-timer timer)))))"
+        ),
+    );
+    handle.run_until_idle(&mut ctx).await.unwrap();
+    eval_i64(&mut ctx, "fired")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repeat_too_large_to_represent_fires_once() {
+    assert_eq!(firings_with_repeat("1.0e300").await, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repeat_that_rounds_to_zero_fires_once() {
+    assert_eq!(firings_with_repeat("1.0e-10").await, 1);
+}
+
 // -- body re-entrancy ---------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]

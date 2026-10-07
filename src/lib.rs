@@ -327,9 +327,11 @@ pub fn register_with_clock(
                     "run-with-timer: invalid secs: {secs}"
                 )));
             }
+            // A repeat that rounds to zero or is too large to represent is
+            // one-shot, like a repeat that is not positive.
             let repeat = repeat
-                .filter(|r| r.is_finite() && *r > 0.0)
-                .map(Duration::from_secs_f64);
+                .and_then(|r| Duration::try_from_secs_f64(r).ok())
+                .filter(|r| !r.is_zero());
             let handle = TimerHandle::new();
             mb_timer.lock().unwrap().push(pending::PendingTask {
                 deadline: clk_timer.now() + Duration::from_secs_f64(secs),

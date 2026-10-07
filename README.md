@@ -48,7 +48,7 @@ cargo run --example sleep
 | --- | --- |
 | `(timerp X)` | Predicate: `t` if `X` is a timer handle, else `nil`. |
 | `(sleep-for SECS)` | Park the current lisp thread for `SECS` seconds, draining due timers along the way. |
-| `(run-with-timer SECS REPEAT FN &rest ARGS)` | Fire `(FN ARGS…)` after `SECS`; if `REPEAT` is a positive number, re-fire every `REPEAT` seconds. `nil`, `0`, or any non-positive `REPEAT` means one-shot. Returns a timer handle. |
+| `(run-with-timer SECS REPEAT FN &rest ARGS)` | Fire `(FN ARGS…)` after `SECS`; if `REPEAT` is a positive number, re-fire every `REPEAT` seconds. `nil`, `0`, or any non-positive `REPEAT` means one-shot, and so does a `REPEAT` under half a nanosecond or too large to represent. Returns a timer handle. |
 | `(cancel-timer H)` | Stop further firings of timer `H`. Returns `nil`. |
 
 Timer bodies run on the calling `TulispContext` — the same one
