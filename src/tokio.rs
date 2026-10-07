@@ -59,16 +59,7 @@ pub(crate) async fn run_until(
     wake: Option<Instant>,
 ) -> Result<(), Error> {
     loop {
-        let popped = {
-            let mut tasks = mailbox.lock().unwrap();
-            tasks.retain(|t| !t.cancel.is_cancelled());
-            match pending::earliest_pending(&tasks) {
-                Some(i) if wake.is_none_or(|w| tasks[i].deadline <= w) => Some(tasks.remove(i)),
-                _ => None,
-            }
-        };
-
-        let Some(task) = popped else {
+        let Some(deadline) = pending::next_deadline(mailbox, wake) else {
             if let Some(w) = wake {
                 let wait = clock.advance_to(w);
                 if !wait.is_zero() {
@@ -78,10 +69,12 @@ pub(crate) async fn run_until(
             return Ok(());
         };
 
-        let wait = clock.advance_to(task.deadline);
+        let wait = clock.advance_to(deadline);
         if !wait.is_zero() {
             tokio::time::sleep(wait).await;
         }
-        pending::fire(ctx, mailbox, task)?;
+        if let Some(task) = pending::pop_due(mailbox, deadline) {
+            pending::fire(ctx, mailbox, task)?;
+        }
     }
 }

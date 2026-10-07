@@ -4,8 +4,8 @@
 //!
 //! Single mailbox per [`register`](crate::register) call, shared by
 //! closure-capture between every builtin that needs to read or write
-//! it. The `Mutex` serializes the read-modify-write of the queue
-//! (reap-cancelled + pop-earliest, push-on-repeat), so a
+//! it. The queue's `Mutex` serializes each read-modify-write of it
+//! (reap-cancelled, pop-earliest, push-on-repeat), so a
 //! `(run-with-timer …)` called from inside a firing body, or a
 //! nested `(sleep-for …)`, sees a consistent view.
 
@@ -45,13 +45,35 @@ pub(crate) fn new_mailbox() -> Mailbox {
 /// entry is cancelled (or the queue is empty). Cancelled-but-not-yet-
 /// reaped entries are skipped here; the drain loop sweeps them on
 /// its own schedule rather than walking the queue per cancel.
-pub(crate) fn earliest_pending(tasks: &[PendingTask]) -> Option<usize> {
+fn earliest_pending(tasks: &[PendingTask]) -> Option<usize> {
     tasks
         .iter()
         .enumerate()
         .filter(|(_, t)| !t.cancel.is_cancelled())
         .min_by_key(|(_, t)| t.deadline)
         .map(|(i, _)| i)
+}
+
+/// Drop the cancelled tasks and return the earliest deadline, if it is at
+/// or before `wake` (any deadline when `wake` is `None`).
+///
+/// The drains wait for that deadline before they take its task with
+/// [`pop_due`], so a drain that stops during the wait (an async one whose
+/// future is dropped) leaves the task queued. The lock is held only
+/// inside these two calls: a body can re-enter the mailbox, by calling
+/// `run-with-timer` or a nested `sleep-for`.
+pub(crate) fn next_deadline(mailbox: &Mailbox, wake: Option<Instant>) -> Option<Instant> {
+    let mut tasks = mailbox.lock().unwrap();
+    tasks.retain(|t| !t.cancel.is_cancelled());
+    let deadline = tasks[earliest_pending(&tasks)?].deadline;
+    wake.is_none_or(|w| deadline <= w).then_some(deadline)
+}
+
+/// Take the earliest live task whose deadline is at or before `at`.
+pub(crate) fn pop_due(mailbox: &Mailbox, at: Instant) -> Option<PendingTask> {
+    let mut tasks = mailbox.lock().unwrap();
+    let i = earliest_pending(&tasks)?;
+    (tasks[i].deadline <= at).then(|| tasks.remove(i))
 }
 
 /// Drive pending firings against `ctx` until `wake`. Mimics Emacs's
@@ -77,26 +99,12 @@ pub(crate) fn drain_until(
     wake: Instant,
 ) -> Result<(), Error> {
     loop {
-        // Lock just long enough to reap cancelled entries and pop the
-        // next firing whose deadline falls before `wake`. The body
-        // itself can re-enter the mailbox (e.g., by calling
-        // `run-with-timer` or a nested `sleep-for`), so we never hold
-        // the lock across `apply` or `sleep_blocking`.
-        let popped = {
-            let mut tasks = mailbox.lock().unwrap();
-            tasks.retain(|t| !t.cancel.is_cancelled());
-            match earliest_pending(&tasks) {
-                Some(i) if tasks[i].deadline <= wake => Some(tasks.remove(i)),
-                _ => None,
-            }
-        };
-
         // No more due-before-wake firings. Reach `wake` and return: a
         // wall clock parks for the remaining window (so `(sleep-for 1)`
         // still waits ~1s when no timers fire); a virtual clock jumps to
         // `wake` for free. `tick`'s `wake == now` case yields a zero
         // residual either way, so it never sleeps.
-        let Some(task) = popped else {
+        let Some(deadline) = next_deadline(mailbox, Some(wake)) else {
             let wait = clock.advance_to(wake);
             if !wait.is_zero() {
                 executor.sleep_blocking(wait);
@@ -106,11 +114,13 @@ pub(crate) fn drain_until(
 
         // Reach this firing's deadline before running it: a wall clock
         // really sleeps the gap, a virtual clock jumps forward for free.
-        let wait = clock.advance_to(task.deadline);
+        let wait = clock.advance_to(deadline);
         if !wait.is_zero() {
             executor.sleep_blocking(wait);
         }
-        fire(ctx, mailbox, task)?;
+        if let Some(task) = pop_due(mailbox, deadline) {
+            fire(ctx, mailbox, task)?;
+        }
     }
 }
 

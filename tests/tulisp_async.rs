@@ -392,6 +392,27 @@ async fn run_until_idle_drains_self_cancelling_timer() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_dropped_run_until_idle_keeps_the_timer_it_waits_for() {
+    // On the wall clock, so the first poll of the drain stops in the wait,
+    // and the select drops it there.
+    let mut ctx = TulispContext::new();
+    let handle = tulisp_async::register(&mut ctx, Arc::new(TokioExecutor::new()));
+    eval_ok(&mut ctx, "(setq ran nil)");
+    eval_ok(
+        &mut ctx,
+        "(run-with-timer 0.2 nil (lambda () (setq ran t)))",
+    );
+    let waited = tokio::select! {
+        biased;
+        r = handle.run_until_idle(&mut ctx) => Some(r),
+        _ = std::future::ready(()) => None,
+    };
+    assert!(waited.is_none(), "the select drops the future");
+    handle.run_until_idle(&mut ctx).await.unwrap();
+    assert_eq!(format!("{}", eval_ok(&mut ctx, "ran")), "t");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn run_for_fires_window_and_returns() {
     let mut ctx = TulispContext::new();
     let handle = tulisp_async::register(&mut ctx, Arc::new(TokioExecutor::new()));
