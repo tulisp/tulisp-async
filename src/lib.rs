@@ -326,22 +326,45 @@ pub fn register_with_clock(
 ) -> Handle {
     let mailbox = pending::new_mailbox();
 
-    ctx.defun("timerp", |v: TulispObject| {
-        v.downcast::<TimerHandle>().is_some()
-    });
+    ctx.defun(
+        (
+            "timerp",
+            ["object"],
+            "Return t if OBJECT is a timer, else nil.",
+        ),
+        |v: TulispObject| v.downcast::<TimerHandle>().is_some(),
+    );
 
     let exec_sleep = executor.clone();
     let mb_sleep = mailbox.clone();
     let clk_sleep = clock.clone();
-    ctx.defun("sleep-for", move |ctx: &mut TulispContext, secs: f64| {
-        let wake = deadline_after(clk_sleep.now(), secs, "sleep-for: invalid duration")?;
-        pending::drain_until(ctx, &mb_sleep, &*exec_sleep, &*clk_sleep, wake)
-    });
+    ctx.defun(
+        (
+            "sleep-for",
+            ["secs"],
+            "Wait SECS seconds, and call each timer that comes due meanwhile, in the \
+             order they come due. SECS can be a fraction. A negative SECS is an error.",
+        ),
+        move |ctx: &mut TulispContext, secs: f64| {
+            let wake = deadline_after(clk_sleep.now(), secs, "sleep-for: invalid duration")?;
+            pending::drain_until(ctx, &mb_sleep, &*exec_sleep, &*clk_sleep, wake)
+        },
+    );
 
     let mb_timer = mailbox.clone();
     let clk_timer = clock.clone();
     ctx.defun(
-        "run-with-timer",
+        (
+            "run-with-timer",
+            ["secs", "repeat", "function", "args"],
+            "Call FUNCTION with ARGS after SECS seconds, and return a timer for it.\n\n\
+             When REPEAT is a positive number, call FUNCTION again every REPEAT \
+             seconds, until cancel-timer stops the timer. When REPEAT is nil or \
+             not positive, call it once. A REPEAT too small or too large to \
+             represent also means once.\n\n\
+             Timers are called while sleep-for waits, or when the program that \
+             embeds Tulisp runs them.",
+        ),
         move |secs: f64, repeat: Option<f64>, f: TulispObject, args: Rest<TulispObject>| {
             let deadline = deadline_after(clk_timer.now(), secs, "run-with-timer: invalid secs")?;
             // A repeat that rounds to zero or is too large to represent is
@@ -361,7 +384,14 @@ pub fn register_with_clock(
         },
     );
 
-    ctx.defun("cancel-timer", |h: TimerHandle| h.cancel());
+    ctx.defun(
+        (
+            "cancel-timer",
+            ["timer"],
+            "Stop TIMER, so that it is not called again. Return nil.",
+        ),
+        |h: TimerHandle| h.cancel(),
+    );
 
     Handle {
         mailbox,

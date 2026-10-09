@@ -861,3 +861,24 @@ async fn run_for_ends_the_window_on_a_stop() {
     assert_eq!(clock.elapsed(), Duration::from_secs(1));
     assert_eq!(format!("{}", eval_ok(&mut ctx, "ran")), "nil");
 }
+
+// -- docs ---------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_builtin_has_named_parameters_and_a_docstring() {
+    let ctx = setup();
+    for (name, signature) in [
+        ("timerp", "(timerp OBJECT)"),
+        ("sleep-for", "(sleep-for SECS)"),
+        (
+            "run-with-timer",
+            "(run-with-timer SECS REPEAT FUNCTION &rest ARGS)",
+        ),
+        ("cancel-timer", "(cancel-timer TIMER)"),
+    ] {
+        let info = ctx.describe(name).expect(name);
+        let rendered = info.signature.expect(name).render(name);
+        assert_eq!(rendered, signature);
+        assert!(info.doc.is_some_and(|doc| !doc.is_empty()), "{name}");
+    }
+}
