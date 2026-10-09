@@ -11,8 +11,8 @@ feature.
 
 ```toml
 [dependencies]
-tulisp = "0.31"
-tulisp-async = "0.3"
+tulisp = "0.32"
+tulisp-async = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
@@ -92,7 +92,7 @@ Disable defaults to depend only on the `Executor` trait and handle
 types:
 
 ```toml
-tulisp-async = { version = "0.3", default-features = false }
+tulisp-async = { version = "0.4", default-features = false }
 ```
 
 Add a new runtime by implementing `Executor` in your own crate (or
